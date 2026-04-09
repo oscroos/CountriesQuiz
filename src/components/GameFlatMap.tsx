@@ -165,6 +165,9 @@ function buildFlatMapHtml(
         flashPlaceId: normalizePlaceId(initialState.flashPlaceId || ''),
         solvedPlaceIds: new Set((initialState.solvedPlaceIds || []).map((value) => normalizePlaceId(value))),
       };
+      const TAP_MOVE_THRESHOLD = 12;
+      const TAP_SUPPRESSION_MS = 240;
+      const TAP_RECENCY_MS = 420;
       let selectedPlaceId = '';
       let viewportWidth = 0;
       let viewportHeight = 0;
@@ -185,6 +188,16 @@ function buildFlatMapHtml(
       let visibleFeatures = [];
       let featureDisplayDeltaXCache = new Map();
       let featureDisplayDeltaYCache = new Map();
+      const interactionGuard = {
+        blockedUntil: 0,
+        isPointerDown: false,
+        lastInteractionEndedAt: 0,
+        lastInteractionWasTap: false,
+        maxDistance: 0,
+        multiTouch: false,
+        startX: 0,
+        startY: 0,
+      };
 
       const HORIZONTAL_MAP_PADDING = 10;
       const VERTICAL_MAP_PADDING = 18;
@@ -211,6 +224,119 @@ function buildFlatMapHtml(
         }
 
         window.ReactNativeWebView.postMessage(JSON.stringify(payload));
+      }
+
+      function getPrimaryPointerPosition(event) {
+        if (!event) return null;
+        if (typeof event.clientX === 'number' && typeof event.clientY === 'number') {
+          return { x: event.clientX, y: event.clientY };
+        }
+        if (event.changedTouches && event.changedTouches.length > 0) {
+          const touch = event.changedTouches[0];
+          return { x: touch.clientX, y: touch.clientY };
+        }
+        if (event.touches && event.touches.length > 0) {
+          const touch = event.touches[0];
+          return { x: touch.clientX, y: touch.clientY };
+        }
+        return null;
+      }
+
+      function getTouchCount(event) {
+        if (!event) return 0;
+        if (event.touches && typeof event.touches.length === 'number') {
+          return event.touches.length;
+        }
+        if (event.changedTouches && typeof event.changedTouches.length === 'number') {
+          return event.changedTouches.length;
+        }
+        return 0;
+      }
+
+      function blockSelections(duration = TAP_SUPPRESSION_MS) {
+        interactionGuard.blockedUntil = Math.max(interactionGuard.blockedUntil, Date.now() + duration);
+        interactionGuard.lastInteractionWasTap = false;
+      }
+
+      function beginInteraction(event) {
+        const point = getPrimaryPointerPosition(event);
+        if (!point) {
+          return;
+        }
+
+        interactionGuard.isPointerDown = true;
+        interactionGuard.lastInteractionWasTap = false;
+        interactionGuard.maxDistance = 0;
+        interactionGuard.multiTouch = getTouchCount(event) > 1;
+        interactionGuard.startX = point.x;
+        interactionGuard.startY = point.y;
+
+        if (interactionGuard.multiTouch) {
+          blockSelections(320);
+        }
+      }
+
+      function updateInteraction(event) {
+        if (!interactionGuard.isPointerDown) {
+          return;
+        }
+
+        if (getTouchCount(event) > 1) {
+          interactionGuard.multiTouch = true;
+          blockSelections(320);
+        }
+
+        const point = getPrimaryPointerPosition(event);
+        if (!point) {
+          return;
+        }
+
+        const distance = Math.hypot(point.x - interactionGuard.startX, point.y - interactionGuard.startY);
+        interactionGuard.maxDistance = Math.max(interactionGuard.maxDistance, distance);
+
+        if (interactionGuard.maxDistance > TAP_MOVE_THRESHOLD) {
+          blockSelections();
+        }
+      }
+
+      function endInteraction(event) {
+        if (!interactionGuard.isPointerDown) {
+          return;
+        }
+
+        updateInteraction(event);
+        interactionGuard.isPointerDown = false;
+        interactionGuard.lastInteractionEndedAt = Date.now();
+        interactionGuard.lastInteractionWasTap =
+          !interactionGuard.multiTouch && interactionGuard.maxDistance <= TAP_MOVE_THRESHOLD;
+
+        if (!interactionGuard.lastInteractionWasTap) {
+          blockSelections();
+        }
+      }
+
+      function cancelInteraction() {
+        interactionGuard.isPointerDown = false;
+        interactionGuard.multiTouch = false;
+        interactionGuard.maxDistance = 0;
+        interactionGuard.lastInteractionEndedAt = Date.now();
+        interactionGuard.lastInteractionWasTap = false;
+        blockSelections();
+      }
+
+      function shouldHandleTapSelection() {
+        const now = Date.now();
+        if (now < interactionGuard.blockedUntil) {
+          interactionGuard.lastInteractionWasTap = false;
+          return false;
+        }
+
+        const isRecentTap =
+          interactionGuard.lastInteractionWasTap &&
+          now - interactionGuard.lastInteractionEndedAt <= TAP_RECENCY_MS;
+
+        interactionGuard.lastInteractionWasTap = false;
+        return isRecentTap;
       }
 
       function getFeatureName(feature) {
@@ -1001,7 +1127,7 @@ function buildFlatMapHtml(
           .attr('transform', (feature) => getFeatureDisplayTransform(feature, polarPath))
           .attr('vector-effect', 'non-scaling-stroke')
           .on('click', (event, feature) => {
-            if (quizState.disabled) {
+            if (quizState.disabled || !shouldHandleTapSelection()) {
               event.stopPropagation();
               return;
             }
@@ -1045,8 +1171,14 @@ function buildFlatMapHtml(
           }
           return !event.button;
         })
+        .clickDistance(TAP_MOVE_THRESHOLD)
+        .tapDistance(TAP_MOVE_THRESHOLD + 4)
         .scaleExtent([1, 18])
         .on('zoom', (event) => {
+          if (event.sourceEvent) {
+            blockSelections(event.sourceEvent.type === 'wheel' ? 320 : TAP_SUPPRESSION_MS);
+          }
+
           const clamped = clampTransform(event.transform);
           if (
             Math.abs(clamped.x - event.transform.x) > 0.001 ||
@@ -1062,8 +1194,20 @@ function buildFlatMapHtml(
         });
 
       if (isInteractive) {
+        if (stage) {
+          stage.addEventListener('pointerdown', beginInteraction, { passive: true });
+          stage.addEventListener('pointermove', updateInteraction, { passive: true });
+          stage.addEventListener('pointerup', endInteraction, { passive: true });
+          stage.addEventListener('pointercancel', cancelInteraction, { passive: true });
+          stage.addEventListener('wheel', () => blockSelections(320), { passive: true });
+        }
+
         svg.call(zoom);
         svg.on('click', (event) => {
+          if (!shouldHandleTapSelection()) {
+            return;
+          }
+
           if (event.target && event.target.tagName !== 'path') {
             selectedPlaceId = '';
             updateCountryVisualState();

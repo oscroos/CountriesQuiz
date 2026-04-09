@@ -1,11 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
+  Image,
   Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  type DimensionValue,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -114,6 +118,177 @@ const regionDashboardRows = [
   ['region-south-america', 'region-oceania', `region-${US_STATES_REGION_KEY}`],
 ] as const;
 
+const previewCompletedVariantIds = ['globe-world', 'region-asia', `region-${US_STATES_REGION_KEY}`] as const;
+
+const dashboardArtworkByRegion = {
+  africa: require('./src/icons/africa.png'),
+  asia: require('./src/icons/asia.png'),
+  europe: require('./src/icons/europe.png'),
+  'north-america': require('./src/icons/north-america.png'),
+  oceania: require('./src/icons/oceania.png'),
+  'south-america': require('./src/icons/south-america.png'),
+  'us-states': require('./src/icons/usa.png'),
+  world: require('./src/icons/world.png'),
+  'world-us-states': require('./src/icons/world+usa.png'),
+} as const;
+
+type BoardArtworkLayer = {
+  centerY?: DimensionValue;
+  centeredSlot?: boolean;
+  height?: number;
+  left?: number;
+  offsetY?: number;
+  right?: number;
+  resizeMode?: 'contain' | 'cover';
+  shadowOpacity: number;
+  size?: number;
+  source: number;
+  visualOpacity: number;
+  width?: DimensionValue;
+};
+
+function mixHexColor(baseColor: string, targetColor: string, targetWeight: number) {
+  const normalize = (value: string) => value.replace('#', '').trim();
+  const base = normalize(baseColor);
+  const target = normalize(targetColor);
+
+  if (base.length !== 6 || target.length !== 6) {
+    return null;
+  }
+
+  const channel = (value: string, index: number) => Number.parseInt(value.slice(index, index + 2), 16);
+  const toHex = (value: number) => Math.round(value).toString(16).padStart(2, '0');
+
+  const red = channel(base, 0) * (1 - targetWeight) + channel(target, 0) * targetWeight;
+  const green = channel(base, 2) * (1 - targetWeight) + channel(target, 2) * targetWeight;
+  const blue = channel(base, 4) * (1 - targetWeight) + channel(target, 4) * targetWeight;
+
+  return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+
+function getBoardArtworks(variant: GameVariant, compact: boolean): readonly BoardArtworkLayer[] | null {
+  if (variant.mode === 'globe' && !variant.showUsStates) {
+    return [
+      {
+        centeredSlot: true,
+        height: compact ? 48 : 60,
+        right: compact ? 2 : 4,
+        resizeMode: 'cover',
+        shadowOpacity: compact ? 0.1 : 0.12,
+        source: dashboardArtworkByRegion.world,
+        visualOpacity: compact ? 0.18 : 0.21,
+        width: '67%',
+      },
+    ];
+  }
+
+  if (variant.mode === 'globe' && variant.showUsStates) {
+    return [
+      {
+        centeredSlot: true,
+        height: compact ? 48 : 60,
+        right: compact ? 2 : 4,
+        resizeMode: 'cover',
+        shadowOpacity: compact ? 0.1 : 0.12,
+        source: dashboardArtworkByRegion['world-us-states'],
+        visualOpacity: compact ? 0.18 : 0.21,
+        width: '67%',
+      },
+    ];
+  }
+
+  const artworkKey = variant.region;
+
+  const source = dashboardArtworkByRegion[artworkKey as keyof typeof dashboardArtworkByRegion];
+  if (!source) {
+    return null;
+  }
+
+  switch (artworkKey) {
+    case 'world':
+      return null;
+    case 'asia':
+      return [
+        {
+          centerY: compact ? 34 : 42,
+          right: compact ? -2 : 2,
+          shadowOpacity: compact ? 0.09 : 0.11,
+          size: compact ? 62 : 82,
+          source,
+          visualOpacity: compact ? 0.16 : 0.19,
+        },
+      ];
+    case 'europe':
+      return [
+        {
+          centerY: compact ? 33 : 40,
+          right: compact ? 1 : 4,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 58 : 72,
+          source,
+          visualOpacity: compact ? 0.15 : 0.18,
+        },
+      ];
+    case 'africa':
+      return [
+        {
+          centerY: compact ? 34 : 42,
+          right: compact ? 0 : 4,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 58 : 74,
+          source,
+          visualOpacity: compact ? 0.15 : 0.18,
+        },
+      ];
+    case 'north-america':
+      return [
+        {
+          centerY: compact ? 33 : 41,
+          right: compact ? -1 : 3,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 60 : 76,
+          source,
+          visualOpacity: compact ? 0.14 : 0.17,
+        },
+      ];
+    case 'south-america':
+      return [
+        {
+          centerY: compact ? 35 : 43,
+          right: compact ? 3 : 7,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 50 : 64,
+          source,
+          visualOpacity: compact ? 0.15 : 0.18,
+        },
+      ];
+    case 'oceania':
+      return [
+        {
+          centerY: compact ? 34 : 42,
+          right: compact ? 1 : 5,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 56 : 70,
+          source,
+          visualOpacity: compact ? 0.15 : 0.18,
+        },
+      ];
+    case 'us-states':
+      return [
+        {
+          centerY: compact ? 34 : 42,
+          right: compact ? -1 : 3,
+          shadowOpacity: compact ? 0.08 : 0.1,
+          size: compact ? 58 : 74,
+          source,
+          visualOpacity: compact ? 0.14 : 0.17,
+        },
+      ];
+    default:
+      return null;
+  }
+}
+
 function resolveVariantId(
   mode: GameMode,
   selectedRegion: MenuRegionKey,
@@ -162,33 +337,174 @@ function BoardMetric({
   accent,
   bestScore,
   compact,
+  isCompleted,
   variant,
 }: {
   accent: string;
   bestScore: number;
   compact: boolean;
+  isCompleted: boolean;
   variant: GameVariant;
 }) {
+  const artworks = getBoardArtworks(variant, compact);
+  const artworkTint = isCompleted ? '#d6ffed' : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef';
+
   return (
     <View
       style={[
         styles.metricTile,
         styles.boardMetric,
         compact && styles.boardMetricCompact,
+        isCompleted && styles.boardMetricCompleted,
         {
-          borderColor: `${accent}55`,
+          borderColor: isCompleted ? 'rgba(108, 201, 164, 0.72)' : `${accent}55`,
         },
       ]}
     >
       <View style={[styles.boardMetricAccent, { backgroundColor: accent }]} />
-      <Text style={[styles.boardMetricTitle, compact && styles.boardMetricTitleCompact]}>
+      {artworks ? (
+        <View pointerEvents="none" style={styles.boardMetricArtworkLayer}>
+          {artworks.map((artwork, index) => {
+            const artworkShadowOpacity = isCompleted
+              ? artwork.shadowOpacity
+              : Math.min(artwork.shadowOpacity + 0.04, 0.18);
+            const artworkVisualOpacity = isCompleted
+              ? artwork.visualOpacity
+              : Math.min(artwork.visualOpacity + 0.1, 0.34);
+            const artworkWidth = artwork.width ?? artwork.size;
+            const artworkHeight = artwork.height ?? artwork.size;
+            const imageWidth = typeof artworkWidth === 'string' ? '100%' : artworkWidth;
+
+            if (artwork.centeredSlot) {
+              return (
+                <View
+                  key={`artwork-${variant.id}-${index}`}
+                  style={[
+                    styles.boardMetricArtworkSlot,
+                    ...(artwork.left != null ? [{ left: artwork.left, alignItems: 'flex-start' as const }] : []),
+                    ...(artwork.right != null ? [{ right: artwork.right, alignItems: 'flex-end' as const }] : []),
+                    { width: artworkWidth },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.boardMetricArtworkStack,
+                      {
+                        height: artworkHeight,
+                        width: imageWidth,
+                      },
+                    ]}
+                  >
+                    <Image
+                      blurRadius={compact ? 12 : 14}
+                      resizeMode={artwork.resizeMode ?? 'contain'}
+                      source={artwork.source}
+                      style={[
+                        styles.boardMetricArtworkShadow,
+                        {
+                          height: artworkHeight,
+                          opacity: artworkShadowOpacity,
+                          tintColor: artworkTint,
+                          width: imageWidth,
+                        },
+                      ]}
+                    />
+                    <Image
+                      resizeMode={artwork.resizeMode ?? 'contain'}
+                      source={artwork.source}
+                      style={[
+                        styles.boardMetricArtwork,
+                        {
+                          height: artworkHeight,
+                          opacity: artworkVisualOpacity,
+                          tintColor: artworkTint,
+                          width: imageWidth,
+                        },
+                      ]}
+                    />
+                  </View>
+                </View>
+              );
+            }
+
+            return (
+              <View key={`artwork-${variant.id}-${index}`}>
+                <Image
+                  blurRadius={compact ? 12 : 14}
+                  resizeMode={artwork.resizeMode ?? 'contain'}
+                  source={artwork.source}
+                  style={[
+                    styles.boardMetricArtworkShadow,
+                    {
+                      height: artworkHeight,
+                      ...(artwork.left != null ? { left: artwork.left } : {}),
+                      opacity: artworkShadowOpacity,
+                      ...(artwork.right != null ? { right: artwork.right } : {}),
+                      top: artwork.centerY,
+                      tintColor: artworkTint,
+                      transform: [
+                        { translateY: -(artworkHeight ?? 0) / 2 + (artwork.offsetY ?? 0) },
+                      ],
+                      width: artworkWidth,
+                    },
+                  ]}
+                />
+                <Image
+                  resizeMode={artwork.resizeMode ?? 'contain'}
+                  source={artwork.source}
+                  style={[
+                    styles.boardMetricArtwork,
+                    {
+                      height: artworkHeight,
+                      ...(artwork.left != null ? { left: artwork.left } : {}),
+                      opacity: artworkVisualOpacity,
+                      ...(artwork.right != null ? { right: artwork.right } : {}),
+                      top: artwork.centerY,
+                      tintColor: artworkTint,
+                      transform: [
+                        { translateY: -(artworkHeight ?? 0) / 2 + (artwork.offsetY ?? 0) },
+                      ],
+                      width: artworkWidth,
+                    },
+                  ]}
+                />
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+      {isCompleted ? (
+        <View style={[styles.boardMetricBadge, compact && styles.boardMetricBadgeCompact]}>
+          <Feather color={uiTheme.surface} name="check" size={10} />
+        </View>
+      ) : null}
+      <Text
+        style={[
+          styles.boardMetricTitle,
+          compact && styles.boardMetricTitleCompact,
+          isCompleted && styles.boardMetricTitleWithBadge,
+          isCompleted && compact && styles.boardMetricTitleWithBadgeCompact,
+        ]}
+      >
         {variant.shortLabel}
       </Text>
       <View style={[styles.boardMetricScoreWrap, compact && styles.boardMetricScoreWrapCompact]}>
-        <Text style={[styles.boardMetricValue, compact && styles.boardMetricValueCompact]}>
+        <Text
+          style={[
+            styles.boardMetricValue,
+            compact && styles.boardMetricValueCompact,
+            isCompleted && styles.boardMetricValueCompleted,
+          ]}
+        >
           {bestScore}
         </Text>
-        <Text style={[styles.boardMetricContext, compact && styles.boardMetricContextCompact]}>
+        <Text
+          style={[
+            styles.boardMetricContext,
+            compact && styles.boardMetricContextCompact,
+            isCompleted && styles.boardMetricContextCompleted,
+          ]}
+        >
           out of {variant.placeCount}
         </Text>
       </View>
@@ -213,6 +529,22 @@ function HeroSectionHeader({
   );
 }
 
+function getRegionPickerLabel(variant: GameVariant) {
+  if (variant.region === 'north-america') {
+    return 'N. America';
+  }
+
+  if (variant.region === 'south-america') {
+    return 'S. America';
+  }
+
+  if (variant.region === US_STATES_REGION_KEY) {
+    return US_STATES_REGION_LABEL;
+  }
+
+  return variant.label;
+}
+
 function AppContent() {
   const { height: screenHeight } = useWindowDimensions();
   const [mode, setMode] = useState<GameMode>('globe');
@@ -226,9 +558,8 @@ function AppContent() {
   const [summary, setSummary] = useState<GameSummary | null>(null);
   const [isStartModalOpen, setIsStartModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
-  const [homeScreenHeight, setHomeScreenHeight] = useState(screenHeight);
-  const [homeButtonsHeight, setHomeButtonsHeight] = useState(132);
-  const [homeHeroIntroHeight, setHomeHeroIntroHeight] = useState(148);
+  const [startModeOptionsHeight, setStartModeOptionsHeight] = useState(94);
+  const [homeBoardsAreaHeight, setHomeBoardsAreaHeight] = useState(0);
 
   const highscoresRef = useRef<HighscoreMap>({});
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
@@ -240,30 +571,62 @@ function AppContent() {
     () => gameVariants.filter((variant) => variant.mode === 'globe'),
     []
   );
+  const fullGlobePlaceCount = globeVariants[0]?.placeCount ?? 0;
   const regionVariants = useMemo(
     () => gameVariants.filter((variant) => regionVariantIds.includes(variant.id)),
     []
   );
+  const regionPickerVariants = useMemo(
+    () =>
+      [...regionVariants].sort((left, right) => {
+        const leftLabel = getRegionPickerLabel(left);
+        const rightLabel = getRegionPickerLabel(right);
+        if (leftLabel.length !== rightLabel.length) {
+          return leftLabel.length - rightLabel.length;
+        }
+
+        return leftLabel.localeCompare(rightLabel);
+      }),
+    [regionVariants]
+  );
+  const regionPickerRows = useMemo(() => {
+    if (regionPickerVariants.length <= 4) {
+      return [regionPickerVariants];
+    }
+
+    return [regionPickerVariants.slice(0, 4), regionPickerVariants.slice(4)];
+  }, [regionPickerVariants]);
   const regionVariantsById = useMemo(
     () => Object.fromEntries(regionVariants.map((variant) => [variant.id, variant])),
     [regionVariants]
   );
-  const homeBoardsHeight = useMemo(() => {
-    const measuredHeight = homeScreenHeight - homeButtonsHeight - homeHeroIntroHeight - 52;
-    const fallbackHeight = screenHeight * 0.47;
-    const resolvedHeight = measuredHeight > 0 ? measuredHeight : fallbackHeight;
+  const displayHighscores = useMemo(() => {
+    if (!__DEV__) {
+      return highscores;
+    }
 
-    return Math.max(146, Math.floor(resolvedHeight));
-  }, [homeButtonsHeight, homeHeroIntroHeight, homeScreenHeight, screenHeight]);
-  const boardRowHeight = useMemo(() => {
-    const reservedHeight = 102;
-    return Math.max(15, Math.floor((homeBoardsHeight - reservedHeight) / 4));
-  }, [homeBoardsHeight]);
-  const isCompactBoardLayout = boardRowHeight < 56;
+    const nextHighscores: HighscoreMap = { ...highscores };
 
-  useEffect(() => {
-    setHomeScreenHeight(screenHeight);
-  }, [screenHeight]);
+    previewCompletedVariantIds.forEach((variantId) => {
+      const variant = getVariantById(variantId);
+      const existingEntry = nextHighscores[variantId];
+
+      nextHighscores[variantId] = {
+        bestAccuracy: 100,
+        bestScore: variant.placeCount,
+        fastestMs: existingEntry?.fastestMs ?? null,
+        lastPlayedAt: existingEntry?.lastPlayedAt ?? null,
+        plays: Math.max(existingEntry?.plays ?? 0, 1),
+      };
+    });
+
+    return nextHighscores;
+  }, [highscores]);
+  const selectedVariantBestScore = Math.min(
+    displayHighscores[selectedVariant.id]?.bestScore ?? 0,
+    selectedVariant.placeCount
+  );
+  const isCompactBoardLayout = homeBoardsAreaHeight > 0 ? homeBoardsAreaHeight < 320 : screenHeight < 760;
 
   const regionBoardRows = useMemo(
     () =>
@@ -511,8 +874,12 @@ function AppContent() {
         end={{ x: 1, y: 1 }}
         style={StyleSheet.absoluteFill}
       />
-      <View style={styles.pageGlowOne} />
-      <View style={styles.pageGlowTwo} />
+      {session ? (
+        <>
+          <View style={styles.pageGlowOne} />
+          <View style={styles.pageGlowTwo} />
+        </>
+      ) : null}
 
       {session ? (
         <View style={styles.gameScreen}>
@@ -637,18 +1004,12 @@ function AppContent() {
           ) : null}
         </View>
       ) : (
-        <View
-          style={styles.homeScreen}
-          onLayout={(event) => setHomeScreenHeight(event.nativeEvent.layout.height)}
-        >
+        <View style={styles.homeScreen}>
           <View style={styles.homeBackdropCircleOne} />
           <View style={styles.homeBackdropCircleTwo} />
 
           <View style={styles.homeHero}>
-            <View
-              style={styles.homeHeroIntro}
-              onLayout={(event) => setHomeHeroIntroHeight(event.nativeEvent.layout.height)}
-            >
+            <View style={styles.homeHeroIntro}>
               <View style={styles.homeHeroCopy}>
                 <Text style={styles.homeHeroEyebrow}>Countries Quiz</Text>
                 <Text style={styles.homeHeroTitle}>Learn the World Map</Text>
@@ -658,7 +1019,10 @@ function AppContent() {
               </View>
             </View>
 
-            <View style={[styles.homeHeroBoards, { height: homeBoardsHeight }]}>
+            <View
+              style={styles.homeHeroBoards}
+              onLayout={(event) => setHomeBoardsAreaHeight(event.nativeEvent.layout.height)}
+            >
               {isLoadingHighscores ? (
                 <View style={styles.heroLoadingCard}>
                   <ActivityIndicator color={uiTheme.surface} size="small" />
@@ -666,12 +1030,13 @@ function AppContent() {
                 </View>
               ) : (
                 <>
-                  <View style={styles.heroBoardSection}>
+                  <View style={[styles.heroBoardSection, styles.heroBoardSectionGlobal]}>
                     <HeroSectionHeader icon="globe" title="Global" />
-                    <View style={[styles.heroBoardRow, { height: boardRowHeight }]}>
+                    <View style={styles.heroBoardRow}>
                       {globeVariants.map((variant) => {
-                        const entry = highscores[variant.id];
+                        const entry = displayHighscores[variant.id];
                         const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
+                        const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
 
                         return (
                           <BoardMetric
@@ -679,6 +1044,7 @@ function AppContent() {
                             accent={variant.accent}
                             bestScore={bestScore}
                             compact={isCompactBoardLayout}
+                            isCompleted={isCompleted}
                             variant={variant}
                           />
                         );
@@ -686,14 +1052,15 @@ function AppContent() {
                     </View>
                   </View>
 
-                  <View style={styles.heroBoardSection}>
+                  <View style={[styles.heroBoardSection, styles.heroBoardSectionRegions]}>
                     <HeroSectionHeader icon="map" title="Regions" />
                     <View style={styles.heroBoardRows}>
                       {regionBoardRows.map((row, rowIndex) => (
-                        <View key={`region-row-${rowIndex}`} style={[styles.heroBoardRow, { height: boardRowHeight }]}>
+                        <View key={`region-row-${rowIndex}`} style={styles.heroBoardRow}>
                           {row.map((variant) => {
-                            const entry = highscores[variant.id];
+                            const entry = displayHighscores[variant.id];
                             const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
+                            const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
 
                             return (
                               <BoardMetric
@@ -701,6 +1068,7 @@ function AppContent() {
                                 accent={variant.accent}
                                 bestScore={bestScore}
                                 compact={isCompactBoardLayout}
+                                isCompleted={isCompleted}
                                 variant={variant}
                               />
                             );
@@ -714,10 +1082,7 @@ function AppContent() {
             </View>
           </View>
 
-          <View
-            style={styles.homeButtons}
-            onLayout={(event) => setHomeButtonsHeight(event.nativeEvent.layout.height)}
-          >
+          <View style={styles.homeButtons}>
             <SecondaryButton
               label="Game History"
               onPress={() => setIsHistoryModalOpen(true)}
@@ -727,18 +1092,11 @@ function AppContent() {
         </View>
       )}
 
-      <Modal
-        animationType="slide"
-        transparent
-        visible={isStartModalOpen}
-        onRequestClose={() => setIsStartModalOpen(false)}
-      >
-        <View style={styles.sheetBackdrop}>
-          <View style={styles.sheetCard}>
+      <BottomSheetModal visible={isStartModalOpen} onClose={() => setIsStartModalOpen(false)}>
             <Text style={styles.sheetEyebrow}>Start Game</Text>
-            <Text style={styles.sheetTitle}>Choose your quiz surface</Text>
+            <Text style={styles.sheetTitle}>Choose game mode</Text>
             <Text style={styles.sheetBody}>
-              The landing page stays minimal, so game setup lives here.
+              Either play the full globe of {fullGlobePlaceCount} places or a smaller region.
             </Text>
 
             <ScrollView
@@ -762,7 +1120,10 @@ function AppContent() {
               </View>
 
               {mode === 'globe' ? (
-                <View style={styles.toggleCard}>
+                <View
+                  style={styles.toggleCard}
+                  onLayout={(event) => setStartModeOptionsHeight(event.nativeEvent.layout.height)}
+                >
                   <View style={styles.toggleCopy}>
                     <Text style={styles.toggleTitle}>Break the U.S. into states</Text>
                     <Text style={styles.toggleBody}>
@@ -785,55 +1146,60 @@ function AppContent() {
                   </Pressable>
                 </View>
               ) : (
-                <View style={styles.regionPicker}>
-                  {regionVariants.map((variant) => {
-                    const isActive = selectedRegion === variant.region;
-                    return (
-                      <Pressable
-                        key={variant.id}
-                        style={[
-                          styles.regionChip,
-                          isActive && {
-                            backgroundColor: variant.accent,
-                            borderColor: variant.accent,
-                          },
-                        ]}
-                        onPress={() => setSelectedRegion(variant.region as MenuRegionKey)}
-                      >
-                        <Text
-                          style={[
-                            styles.regionChipText,
-                            isActive && styles.regionChipTextActive,
-                          ]}
-                        >
-                          {variant.region === US_STATES_REGION_KEY ? US_STATES_REGION_LABEL : variant.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
+                <View style={[styles.regionPickerFrame, { height: startModeOptionsHeight }]}>
+                  <View style={styles.regionPicker}>
+                    {regionPickerRows.map((row, rowIndex) => (
+                      <View key={`region-pill-row-${rowIndex}`} style={styles.regionPickerRow}>
+                        {row.map((variant) => {
+                          const isActive = selectedRegion === variant.region;
+                          return (
+                            <Pressable
+                              key={variant.id}
+                              style={[
+                                styles.regionChip,
+                                isActive && {
+                                  backgroundColor: variant.accent,
+                                  borderColor: variant.accent,
+                                },
+                              ]}
+                              onPress={() => setSelectedRegion(variant.region as MenuRegionKey)}
+                            >
+                              <Text
+                                style={[
+                                  styles.regionChipText,
+                                  isActive && styles.regionChipTextActive,
+                                ]}
+                              >
+                                {getRegionPickerLabel(variant)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
+                    ))}
+                  </View>
                 </View>
               )}
 
               <View style={styles.variantPreview}>
-                <View style={styles.variantBadgeRow}>
-                  <View style={[styles.variantAccentDot, { backgroundColor: selectedVariant.accent }]} />
-                  <Text style={styles.variantPreviewTitle}>{selectedVariant.label}</Text>
-                </View>
-                <Text style={styles.variantPreviewBody}>{selectedVariant.description}</Text>
+                <View
+                  style={[styles.variantPreviewAccent, { backgroundColor: selectedVariant.accent }]}
+                />
+                <Text style={styles.variantPreviewTitle}>{selectedVariant.label}</Text>
                 <View style={styles.variantMetaRow}>
-                  <MetaTile label="Places" value={String(selectedVariant.placeCount)} />
-                  <MetaTile label="Goal" value={String(selectedVariant.placeCount)} />
                   <MetaTile
-                    label="Surface"
-                    value={selectedVariant.mode === 'globe' ? '3D globe' : 'Flat map'}
+                    accent={selectedVariant.accent}
+                    label="Highscore"
+                    value={isLoadingHighscores ? '...' : String(selectedVariantBestScore)}
                   />
+                  <MetaTile accent={selectedVariant.accent} label="Places" value={String(selectedVariant.placeCount)} />
                 </View>
               </View>
             </ScrollView>
 
             <View style={styles.sheetButtonRow}>
               <PrimaryButton
-                label="Start Run"
+                label="Start game"
                 onPress={handleConfirmStart}
               />
               <SecondaryButton
@@ -841,18 +1207,9 @@ function AppContent() {
                 onPress={() => setIsStartModalOpen(false)}
               />
             </View>
-          </View>
-        </View>
-      </Modal>
+      </BottomSheetModal>
 
-      <Modal
-        animationType="slide"
-        transparent
-        visible={isHistoryModalOpen}
-        onRequestClose={() => setIsHistoryModalOpen(false)}
-      >
-        <View style={styles.sheetBackdrop}>
-          <View style={styles.sheetCard}>
+      <BottomSheetModal visible={isHistoryModalOpen} onClose={() => setIsHistoryModalOpen(false)}>
             <Text style={styles.sheetEyebrow}>Game History</Text>
             <Text style={styles.sheetTitle}>Recent runs</Text>
             <Text style={styles.sheetBody}>
@@ -900,9 +1257,7 @@ function AppContent() {
               label="Close"
               onPress={() => setIsHistoryModalOpen(false)}
             />
-          </View>
-        </View>
-      </Modal>
+      </BottomSheetModal>
     </SafeAreaView>
   );
 }
@@ -935,9 +1290,17 @@ function SegmentButton({
   );
 }
 
-function MetaTile({ label, value }: { label: string; value: string }) {
+function MetaTile({
+  accent,
+  label,
+  value,
+}: {
+  accent: string;
+  label: string;
+  value: string;
+}) {
   return (
-    <View style={styles.metaTile}>
+    <View style={[styles.metaTile, { borderColor: `${accent}55` }]}>
       <Text style={styles.metaTileValue}>{value}</Text>
       <Text style={styles.metaTileLabel}>{label}</Text>
     </View>
@@ -982,6 +1345,87 @@ function SummaryMetric({ label, value }: { label: string; value: string }) {
       <Text style={styles.summaryMetricValue}>{value}</Text>
       <Text style={styles.summaryMetricLabel}>{label}</Text>
     </View>
+  );
+}
+
+function BottomSheetModal({
+  children,
+  onClose,
+  visible,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+  visible: boolean;
+}) {
+  const { height: viewportHeight } = useWindowDimensions();
+  const [isMounted, setIsMounted] = useState(visible);
+  const translateY = useRef(new Animated.Value(viewportHeight)).current;
+
+  useEffect(() => {
+    const hiddenOffset = Math.max(320, viewportHeight);
+
+    if (visible && !isMounted) {
+      setIsMounted(true);
+      return;
+    }
+
+    if (!isMounted) {
+      return;
+    }
+
+    translateY.stopAnimation();
+
+    if (visible) {
+      translateY.setValue(hiddenOffset);
+      const frameId = requestAnimationFrame(() => {
+        Animated.timing(translateY, {
+          toValue: 0,
+          duration: 280,
+          easing: Easing.out(Easing.cubic),
+          useNativeDriver: true,
+        }).start();
+      });
+
+      return () => cancelAnimationFrame(frameId);
+    }
+
+    Animated.timing(translateY, {
+      toValue: hiddenOffset,
+      duration: 220,
+      easing: Easing.in(Easing.cubic),
+      useNativeDriver: true,
+    }).start(({ finished }) => {
+      if (finished) {
+        setIsMounted(false);
+      }
+    });
+  }, [isMounted, translateY, viewportHeight, visible]);
+
+  if (!isMounted) {
+    return null;
+  }
+
+  return (
+    <Modal
+      animationType="none"
+      transparent
+      visible
+      onRequestClose={onClose}
+    >
+      <View style={styles.sheetBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <Animated.View
+          style={[
+            styles.sheetCard,
+            {
+              transform: [{ translateY }],
+            },
+          ]}
+        >
+          {children}
+        </Animated.View>
+      </View>
+    </Modal>
   );
 }
 
@@ -1041,9 +1485,9 @@ const styles = StyleSheet.create({
   },
   homeHero: {
     flex: 1,
+    minHeight: 0,
     paddingHorizontal: 4,
     paddingTop: 6,
-    overflow: 'hidden',
   },
   homeHeroIntro: {},
   homeHeroCopy: {
@@ -1080,10 +1524,11 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   homeHeroBoards: {
+    flex: 1,
+    minHeight: 0,
     flexShrink: 1,
     marginTop: 18,
     gap: 10,
-    overflow: 'hidden',
   },
   heroLoadingCard: {
     flex: 1,
@@ -1103,8 +1548,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   heroBoardSection: {
+    minHeight: 0,
     gap: 6,
     flexShrink: 1,
+  },
+  heroBoardSectionGlobal: {
+    flex: 1,
+  },
+  heroBoardSectionRegions: {
+    flex: 3,
   },
   heroSectionHeader: {
     flexDirection: 'row',
@@ -1129,17 +1581,29 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   heroBoardRows: {
+    flex: 1,
+    minHeight: 0,
     gap: 8,
     flexShrink: 1,
   },
   heroBoardRow: {
+    flex: 1,
+    minHeight: 0,
     flexDirection: 'row',
     gap: 8,
   },
   boardMetric: {
     flex: 1,
-    height: '100%',
+    minHeight: 0,
+    position: 'relative',
     justifyContent: 'space-between',
+  },
+  boardMetricCompleted: {
+    backgroundColor: 'rgba(57, 110, 95, 0.24)',
+    shadowColor: 'rgba(108, 201, 164, 0.22)',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
   },
   boardMetricCompact: {
     paddingHorizontal: 8,
@@ -1149,6 +1613,45 @@ const styles = StyleSheet.create({
     width: 22,
     height: 4,
     borderRadius: 999,
+  },
+  boardMetricArtworkLayer: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 18,
+    overflow: 'hidden',
+  },
+  boardMetricArtworkSlot: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+  },
+  boardMetricArtworkStack: {
+    position: 'relative',
+  },
+  boardMetricArtworkShadow: {
+    position: 'absolute',
+  },
+  boardMetricArtwork: {
+    position: 'absolute',
+  },
+  boardMetricBadge: {
+    position: 'absolute',
+    top: 10,
+    right: 11,
+    width: 20,
+    height: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: 'rgba(108, 201, 164, 0.26)',
+    borderWidth: 1,
+    borderColor: 'rgba(155, 232, 201, 0.34)',
+  },
+  boardMetricBadgeCompact: {
+    top: 7,
+    right: 8,
+    width: 18,
+    height: 18,
   },
   boardMetricTitle: {
     color: 'rgba(255,255,255,0.84)',
@@ -1162,6 +1665,12 @@ const styles = StyleSheet.create({
     lineHeight: 12,
     marginTop: 5,
   },
+  boardMetricTitleWithBadge: {
+    paddingRight: 24,
+  },
+  boardMetricTitleWithBadgeCompact: {
+    paddingRight: 22,
+  },
   boardMetricScoreWrap: {
     marginTop: 8,
   },
@@ -1174,6 +1683,9 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: '900',
   },
+  boardMetricValueCompleted: {
+    color: '#b7ffe0',
+  },
   boardMetricValueCompact: {
     fontSize: 16,
     lineHeight: 17,
@@ -1184,6 +1696,9 @@ const styles = StyleSheet.create({
     lineHeight: 12,
     fontWeight: '700',
     marginTop: 3,
+  },
+  boardMetricContextCompleted: {
+    color: 'rgba(203, 255, 232, 0.72)',
   },
   boardMetricContextCompact: {
     fontSize: 9,
@@ -1322,11 +1837,20 @@ const styles = StyleSheet.create({
   toggleKnobActive: {
     transform: [{ translateX: 24 }],
   },
-  regionPicker: {
+  regionPickerFrame: {
     marginTop: 16,
-    flexDirection: 'row',
-    flexWrap: 'wrap',
+    height: 94,
+    justifyContent: 'center',
+  },
+  regionPicker: {
+    flex: 1,
+    justifyContent: 'space-between',
     gap: 10,
+  },
+  regionPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   regionChip: {
     borderRadius: 999,
@@ -1347,31 +1871,21 @@ const styles = StyleSheet.create({
   variantPreview: {
     marginTop: 18,
     borderRadius: 24,
-    backgroundColor: '#f7f1e8',
+    backgroundColor: uiTheme.backgroundStrong,
     padding: 18,
     borderWidth: 1,
-    borderColor: uiTheme.border,
+    borderColor: 'rgba(16, 47, 70, 0.16)',
     gap: 14,
   },
-  variantBadgeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  variantAccentDot: {
-    width: 12,
-    height: 12,
+  variantPreviewAccent: {
+    width: 28,
+    height: 4,
     borderRadius: 999,
   },
   variantPreviewTitle: {
-    color: uiTheme.text,
-    fontSize: 17,
+    color: uiTheme.surface,
+    fontSize: 18,
     fontWeight: '800',
-  },
-  variantPreviewBody: {
-    color: uiTheme.textMuted,
-    fontSize: 14,
-    lineHeight: 20,
   },
   variantMetaRow: {
     flexDirection: 'row',
@@ -1380,22 +1894,23 @@ const styles = StyleSheet.create({
   metaTile: {
     flex: 1,
     borderRadius: 18,
-    backgroundColor: uiTheme.surface,
-    paddingVertical: 12,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    paddingVertical: 9,
     paddingHorizontal: 12,
     borderWidth: 1,
-    borderColor: uiTheme.border,
+    borderColor: 'rgba(255,255,255,0.08)',
   },
   metaTileValue: {
-    color: uiTheme.text,
-    fontSize: 16,
+    color: uiTheme.surface,
+    fontSize: 20,
+    lineHeight: 22,
     fontWeight: '800',
   },
   metaTileLabel: {
-    color: uiTheme.textMuted,
-    fontSize: 12,
-    marginTop: 4,
-    fontWeight: '600',
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    marginTop: 2,
+    fontWeight: '700',
   },
   primaryButton: {
     borderRadius: 18,

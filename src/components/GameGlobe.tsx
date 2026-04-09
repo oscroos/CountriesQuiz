@@ -135,7 +135,20 @@ function buildGlobeHtml(
         flashPlaceId: normalizePlaceId(initialState.flashPlaceId || ''),
         solvedPlaceIds: new Set((initialState.solvedPlaceIds || []).map((value) => normalizePlaceId(value))),
       };
+      const TAP_MOVE_THRESHOLD = 12;
+      const TAP_SUPPRESSION_MS = 240;
+      const TAP_RECENCY_MS = 420;
       let selectedPlaceId = '';
+      const interactionGuard = {
+        blockedUntil: 0,
+        isPointerDown: false,
+        lastInteractionEndedAt: 0,
+        lastInteractionWasTap: false,
+        maxDistance: 0,
+        multiTouch: false,
+        startX: 0,
+        startY: 0,
+      };
 
       const SOLVED_COLOR = theme.user;
       const FLASH_COLOR = theme.friendOne;
@@ -248,6 +261,103 @@ function buildGlobeHtml(
         return null;
       }
 
+      function getTouchCount(event) {
+        if (!event) return 0;
+        if (event.touches && typeof event.touches.length === 'number') {
+          return event.touches.length;
+        }
+        if (event.changedTouches && typeof event.changedTouches.length === 'number') {
+          return event.changedTouches.length;
+        }
+        return 0;
+      }
+
+      function blockSelections(duration = TAP_SUPPRESSION_MS) {
+        interactionGuard.blockedUntil = Math.max(interactionGuard.blockedUntil, Date.now() + duration);
+        interactionGuard.lastInteractionWasTap = false;
+      }
+
+      function beginInteraction(event) {
+        const point = getPointerPosition(event);
+        if (!point) {
+          return;
+        }
+
+        interactionGuard.isPointerDown = true;
+        interactionGuard.lastInteractionWasTap = false;
+        interactionGuard.maxDistance = 0;
+        interactionGuard.multiTouch = getTouchCount(event) > 1;
+        interactionGuard.startX = point.x;
+        interactionGuard.startY = point.y;
+
+        if (interactionGuard.multiTouch) {
+          blockSelections(320);
+        }
+      }
+
+      function updateInteraction(event) {
+        if (!interactionGuard.isPointerDown) {
+          return;
+        }
+
+        if (getTouchCount(event) > 1) {
+          interactionGuard.multiTouch = true;
+          blockSelections(320);
+        }
+
+        const point = getPointerPosition(event);
+        if (!point) {
+          return;
+        }
+
+        const distance = Math.hypot(point.x - interactionGuard.startX, point.y - interactionGuard.startY);
+        interactionGuard.maxDistance = Math.max(interactionGuard.maxDistance, distance);
+
+        if (interactionGuard.maxDistance > TAP_MOVE_THRESHOLD) {
+          blockSelections();
+        }
+      }
+
+      function endInteraction(event) {
+        if (!interactionGuard.isPointerDown) {
+          return;
+        }
+
+        updateInteraction(event);
+        interactionGuard.isPointerDown = false;
+        interactionGuard.lastInteractionEndedAt = Date.now();
+        interactionGuard.lastInteractionWasTap =
+          !interactionGuard.multiTouch && interactionGuard.maxDistance <= TAP_MOVE_THRESHOLD;
+
+        if (!interactionGuard.lastInteractionWasTap) {
+          blockSelections();
+        }
+      }
+
+      function cancelInteraction() {
+        interactionGuard.isPointerDown = false;
+        interactionGuard.multiTouch = false;
+        interactionGuard.maxDistance = 0;
+        interactionGuard.lastInteractionEndedAt = Date.now();
+        interactionGuard.lastInteractionWasTap = false;
+        blockSelections();
+      }
+
+      function shouldHandleTapSelection() {
+        const now = Date.now();
+        if (now < interactionGuard.blockedUntil) {
+          interactionGuard.lastInteractionWasTap = false;
+          return false;
+        }
+
+        const isRecentTap =
+          interactionGuard.lastInteractionWasTap &&
+          now - interactionGuard.lastInteractionEndedAt <= TAP_RECENCY_MS;
+
+        interactionGuard.lastInteractionWasTap = false;
+        return isRecentTap;
+      }
+
       function showCountryLabel(countryName, event, kind) {
         if (!countryLabel) return;
         const rect = container.getBoundingClientRect();
@@ -265,6 +375,14 @@ function buildGlobeHtml(
       function hideCountryLabel() {
         if (!countryLabel) return;
         countryLabel.style.display = 'none';
+      }
+
+      if (container) {
+        container.addEventListener('pointerdown', beginInteraction, { passive: true });
+        container.addEventListener('pointermove', updateInteraction, { passive: true });
+        container.addEventListener('pointerup', endInteraction, { passive: true });
+        container.addEventListener('pointercancel', cancelInteraction, { passive: true });
+        container.addEventListener('wheel', () => blockSelections(320), { passive: true });
       }
 
       const globe = Globe({ rendererConfig: { logarithmicDepthBuffer: true } })(container)
@@ -587,7 +705,7 @@ function buildGlobeHtml(
         .polygonCapCurvatureResolution(getCapCurvatureResolution)
         .polygonLabel(() => '')
         .onPolygonClick((feature, event) => {
-          if (quizState.disabled) {
+          if (quizState.disabled || !shouldHandleTapSelection()) {
             return;
           }
 
@@ -605,6 +723,10 @@ function buildGlobeHtml(
           });
         })
         .onGlobeClick(() => {
+          if (!shouldHandleTapSelection()) {
+            return;
+          }
+
           selectedPlaceId = '';
           refreshPolygonStyles();
           hideCountryLabel();
