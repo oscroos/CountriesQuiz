@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "Countries Quiz",
+    "slug": "countries-quiz",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.oscarroos.countriesquiz"
+    },
+    "android": {
+      "package": "com.oscarroos.countriesquiz"
+    }
+  }
+}
