@@ -78,8 +78,8 @@ const variantTemplates: readonly VariantTemplate[] = [
   {
     id: 'globe-world-us-states',
     mode: 'globe',
-    label: 'World + U.S. states',
-    shortLabel: 'World + States',
+    label: 'World & U.S. states',
+    shortLabel: 'World & U.S. states',
     region: 'world',
     showUsStates: true,
     description: 'Full globe, with the U.S. broken into individual states.',

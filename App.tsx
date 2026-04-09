@@ -16,7 +16,7 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { GameFlatMap } from './src/components/GameFlatMap';
 import { GameGlobe } from './src/components/GameGlobe';
@@ -147,6 +147,14 @@ type BoardArtworkLayer = {
   width?: DimensionValue;
 };
 
+type HistoryArtwork = {
+  height: number;
+  resizeMode?: 'contain' | 'cover';
+  right: number;
+  source: number;
+  width: DimensionValue;
+};
+
 function mixHexColor(baseColor: string, targetColor: string, targetWeight: number) {
   const normalize = (value: string) => value.replace('#', '').trim();
   const base = normalize(baseColor);
@@ -164,6 +172,53 @@ function mixHexColor(baseColor: string, targetColor: string, targetWeight: numbe
   const blue = channel(base, 4) * (1 - targetWeight) + channel(target, 4) * targetWeight;
 
   return `#${toHex(red)}${toHex(green)}${toHex(blue)}`;
+}
+
+function getHistoryArtwork(variant: GameVariant): HistoryArtwork | null {
+  if (variant.mode === 'globe' && variant.showUsStates) {
+    return {
+      height: 68,
+      resizeMode: 'cover',
+      right: 8,
+      source: dashboardArtworkByRegion['world-us-states'],
+      width: '46%',
+    };
+  }
+
+  if (variant.mode === 'globe') {
+    return {
+      height: 68,
+      resizeMode: 'cover',
+      right: 8,
+      source: dashboardArtworkByRegion.world,
+      width: '46%',
+    };
+  }
+
+  const artworkKey = variant.region;
+  const source = dashboardArtworkByRegion[artworkKey as keyof typeof dashboardArtworkByRegion];
+  if (!source) {
+    return null;
+  }
+
+  switch (artworkKey) {
+    case 'asia':
+      return { height: 86, right: 4, source, width: 96 };
+    case 'europe':
+      return { height: 82, right: 10, source, width: 82 };
+    case 'africa':
+      return { height: 86, right: 8, source, width: 86 };
+    case 'north-america':
+      return { height: 82, right: 6, source, width: 92 };
+    case 'south-america':
+      return { height: 76, right: 18, source, width: 60 };
+    case 'oceania':
+      return { height: 78, right: 12, source, width: 84 };
+    case 'us-states':
+      return { height: 74, right: 10, source, width: 90 };
+    default:
+      return null;
+  }
 }
 
 function getBoardArtworks(variant: GameVariant, compact: boolean): readonly BoardArtworkLayer[] | null {
@@ -303,12 +358,18 @@ function resolveVariantId(
 
 function formatPlayedAt(value: string) {
   try {
-    return new Intl.DateTimeFormat('en-US', {
+    const date = new Date(value);
+    const dayLabel = new Intl.DateTimeFormat('en-US', {
       month: 'short',
       day: 'numeric',
-      hour: 'numeric',
+    }).format(date);
+    const timeLabel = new Intl.DateTimeFormat('en-GB', {
+      hour: '2-digit',
       minute: '2-digit',
-    }).format(new Date(value));
+      hour12: false,
+    }).format(date);
+
+    return `${dayLabel}, ${timeLabel}`;
   } catch {
     return value;
   }
@@ -338,24 +399,34 @@ function BoardMetric({
   bestScore,
   compact,
   isCompleted,
+  onPress,
   variant,
 }: {
   accent: string;
   bestScore: number;
   compact: boolean;
   isCompleted: boolean;
+  onPress: () => void;
   variant: GameVariant;
 }) {
   const artworks = getBoardArtworks(variant, compact);
   const artworkTint = isCompleted ? '#d6ffed' : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef';
+  const boardTitle =
+    !compact && variant.id === 'globe-world-us-states'
+      ? 'World &\nU.S. states'
+      : !compact && variant.id === 'region-us-states'
+        ? 'U.S.\nstates'
+        : variant.shortLabel;
 
   return (
-    <View
-      style={[
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
         styles.metricTile,
         styles.boardMetric,
         compact && styles.boardMetricCompact,
         isCompleted && styles.boardMetricCompleted,
+        pressed && styles.boardMetricPressed,
         {
           borderColor: isCompleted ? 'rgba(108, 201, 164, 0.72)' : `${accent}55`,
         },
@@ -478,16 +549,19 @@ function BoardMetric({
           <Feather color={uiTheme.surface} name="check" size={10} />
         </View>
       ) : null}
-      <Text
-        style={[
-          styles.boardMetricTitle,
-          compact && styles.boardMetricTitleCompact,
-          isCompleted && styles.boardMetricTitleWithBadge,
-          isCompleted && compact && styles.boardMetricTitleWithBadgeCompact,
-        ]}
-      >
-        {variant.shortLabel}
-      </Text>
+      <View style={[styles.boardMetricTitleSlot, compact && styles.boardMetricTitleSlotCompact]}>
+        <Text
+          numberOfLines={2}
+          style={[
+            styles.boardMetricTitle,
+            compact && styles.boardMetricTitleCompact,
+            isCompleted && styles.boardMetricTitleWithBadge,
+            isCompleted && compact && styles.boardMetricTitleWithBadgeCompact,
+          ]}
+        >
+          {boardTitle}
+        </Text>
+      </View>
       <View style={[styles.boardMetricScoreWrap, compact && styles.boardMetricScoreWrapCompact]}>
         <Text
           style={[
@@ -508,7 +582,7 @@ function BoardMetric({
           out of {variant.placeCount}
         </Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
@@ -626,7 +700,43 @@ function AppContent() {
     displayHighscores[selectedVariant.id]?.bestScore ?? 0,
     selectedVariant.placeCount
   );
+  const isSelectedVariantCompleted =
+    selectedVariant.placeCount > 0 && selectedVariantBestScore >= selectedVariant.placeCount;
   const isCompactBoardLayout = homeBoardsAreaHeight > 0 ? homeBoardsAreaHeight < 320 : screenHeight < 760;
+  const decoratedHistory = useMemo(() => {
+    const chronologicalEntries = [...gameHistory]
+      .map((entry, index) => ({ entry, index }))
+      .reverse();
+    const bestByVariant = new Map<string, number>();
+    const highscoreIndexes = new Set<number>();
+
+    chronologicalEntries.forEach(({ entry, index }) => {
+      const score = Math.min(Math.max(0, entry.score), Math.max(0, entry.totalQuestions));
+      const previousBest = bestByVariant.get(entry.variantId) ?? 0;
+
+      if (score > 0 && score >= previousBest) {
+        highscoreIndexes.add(index);
+      }
+
+      bestByVariant.set(entry.variantId, Math.max(previousBest, score));
+    });
+
+    return gameHistory.map((entry, index) => {
+      const variant = getVariantById(entry.variantId);
+      const score = Math.min(Math.max(0, entry.score), Math.max(0, entry.totalQuestions));
+      const isCompletedRound = entry.totalQuestions > 0 && score >= entry.totalQuestions;
+
+      return {
+        accent: variant.accent,
+        artwork: getHistoryArtwork(variant),
+        entry,
+        isCompletedRound,
+        isHighscoreRound: highscoreIndexes.has(index),
+        score,
+        variant,
+      };
+    });
+  }, [gameHistory]);
 
   const regionBoardRows = useMemo(
     () =>
@@ -691,6 +801,18 @@ function AppContent() {
   }
 
   function handleStartPress() {
+    setIsStartModalOpen(true);
+  }
+
+  function handleBoardMetricPress(variant: GameVariant) {
+    if (variant.mode === 'globe') {
+      setMode('globe');
+      setIncludeUsStatesOnGlobe(variant.showUsStates);
+    } else {
+      setMode('region');
+      setSelectedRegion(variant.region as MenuRegionKey);
+    }
+
     setIsStartModalOpen(true);
   }
 
@@ -996,7 +1118,7 @@ function AppContent() {
                 </Text>
 
                 <View style={styles.summaryButtonRow}>
-                  <PrimaryButton label="Play Again" onPress={handleSummaryReplay} />
+                  <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
                   <SecondaryButton label="Dashboard" onPress={handleSummaryDashboard} />
                 </View>
               </View>
@@ -1030,52 +1152,54 @@ function AppContent() {
                 </View>
               ) : (
                 <>
-                  <View style={[styles.heroBoardSection, styles.heroBoardSectionGlobal]}>
+                  <View style={styles.heroBoardSection}>
                     <HeroSectionHeader icon="globe" title="Global" />
-                    <View style={styles.heroBoardRow}>
-                      {globeVariants.map((variant) => {
-                        const entry = displayHighscores[variant.id];
-                        const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
-                        const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
+                  </View>
+                  <View style={[styles.heroBoardRow, styles.heroBoardRowGlobal]}>
+                    {globeVariants.map((variant) => {
+                      const entry = displayHighscores[variant.id];
+                      const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
+                      const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
 
-                        return (
-                          <BoardMetric
-                            key={variant.id}
-                            accent={variant.accent}
-                            bestScore={bestScore}
-                            compact={isCompactBoardLayout}
-                            isCompleted={isCompleted}
-                            variant={variant}
-                          />
-                        );
-                      })}
-                    </View>
+                      return (
+                        <BoardMetric
+                          key={variant.id}
+                          accent={variant.accent}
+                          bestScore={bestScore}
+                          compact={isCompactBoardLayout}
+                          isCompleted={isCompleted}
+                          onPress={() => handleBoardMetricPress(variant)}
+                          variant={variant}
+                        />
+                      );
+                    })}
                   </View>
 
-                  <View style={[styles.heroBoardSection, styles.heroBoardSectionRegions]}>
+                  <View style={styles.heroBoardSection}>
                     <HeroSectionHeader icon="map" title="Regions" />
-                    <View style={styles.heroBoardRows}>
-                      {regionBoardRows.map((row, rowIndex) => (
-                        <View key={`region-row-${rowIndex}`} style={styles.heroBoardRow}>
-                          {row.map((variant) => {
-                            const entry = displayHighscores[variant.id];
-                            const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
-                            const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
+                  </View>
+                  <View style={[styles.heroBoardRows, styles.heroBoardRowsRegions]}>
+                    {regionBoardRows.map((row, rowIndex) => (
+                      <View key={`region-row-${rowIndex}`} style={styles.heroBoardRow}>
+                        {row.map((variant) => {
+                          const entry = displayHighscores[variant.id];
+                          const bestScore = Math.min(entry?.bestScore ?? 0, variant.placeCount);
+                          const isCompleted = bestScore >= variant.placeCount && variant.placeCount > 0;
 
-                            return (
-                              <BoardMetric
-                                key={variant.id}
-                                accent={variant.accent}
-                                bestScore={bestScore}
-                                compact={isCompactBoardLayout}
-                                isCompleted={isCompleted}
-                                variant={variant}
-                              />
-                            );
-                          })}
-                        </View>
-                      ))}
-                    </View>
+                          return (
+                            <BoardMetric
+                              key={variant.id}
+                              accent={variant.accent}
+                              bestScore={bestScore}
+                              compact={isCompactBoardLayout}
+                              isCompleted={isCompleted}
+                              onPress={() => handleBoardMetricPress(variant)}
+                              variant={variant}
+                            />
+                          );
+                        })}
+                      </View>
+                    ))}
                   </View>
                 </>
               )}
@@ -1084,16 +1208,16 @@ function AppContent() {
 
           <View style={styles.homeButtons}>
             <SecondaryButton
-              label="Game History"
+              label="Game history"
               onPress={() => setIsHistoryModalOpen(true)}
             />
-            <PrimaryButton label="Start Game" onPress={handleStartPress} />
+            <PrimaryButton label="Start game" onPress={handleStartPress} />
           </View>
         </View>
       )}
 
       <BottomSheetModal visible={isStartModalOpen} onClose={() => setIsStartModalOpen(false)}>
-            <Text style={styles.sheetEyebrow}>Start Game</Text>
+            <Text style={styles.sheetEyebrow}>Start game</Text>
             <Text style={styles.sheetTitle}>Choose game mode</Text>
             <Text style={styles.sheetBody}>
               Either play the full globe of {fullGlobePlaceCount} places or a smaller region.
@@ -1181,11 +1305,32 @@ function AppContent() {
                 </View>
               )}
 
-              <View style={styles.variantPreview}>
+              <View
+                style={[
+                  styles.variantPreview,
+                  isSelectedVariantCompleted && styles.variantPreviewCompleted,
+                ]}
+              >
+                {isSelectedVariantCompleted ? (
+                  <View pointerEvents="none" style={styles.variantPreviewCompletedOverlay} />
+                ) : null}
+                {isSelectedVariantCompleted ? (
+                  <View style={styles.variantPreviewBadge}>
+                    <Feather color={uiTheme.surface} name="check" size={12} />
+                    <Text style={styles.variantPreviewBadgeText}>Completed</Text>
+                  </View>
+                ) : null}
                 <View
                   style={[styles.variantPreviewAccent, { backgroundColor: selectedVariant.accent }]}
                 />
-                <Text style={styles.variantPreviewTitle}>{selectedVariant.label}</Text>
+                <Text
+                  style={[
+                    styles.variantPreviewTitle,
+                    isSelectedVariantCompleted && styles.variantPreviewTitleWithBadge,
+                  ]}
+                >
+                  {selectedVariant.label}
+                </Text>
                 <View style={styles.variantMetaRow}>
                   <MetaTile
                     accent={selectedVariant.accent}
@@ -1210,10 +1355,10 @@ function AppContent() {
       </BottomSheetModal>
 
       <BottomSheetModal visible={isHistoryModalOpen} onClose={() => setIsHistoryModalOpen(false)}>
-            <Text style={styles.sheetEyebrow}>Game History</Text>
-            <Text style={styles.sheetTitle}>Recent runs</Text>
+            <Text style={styles.sheetEyebrow}>Game history</Text>
+            <Text style={styles.sheetTitle}>Played games</Text>
             <Text style={styles.sheetBody}>
-              Your latest completed rounds are stored locally on this device.
+              List of all games played
             </Text>
 
             {isLoadingHistory ? (
@@ -1234,20 +1379,121 @@ function AppContent() {
                 contentContainerStyle={styles.historyListContent}
                 showsVerticalScrollIndicator={false}
               >
-                {gameHistory.map((entry, index) => (
-                  <View key={`${entry.playedAt}-${entry.variantId}-${index}`} style={styles.historyItem}>
-                    <View style={styles.historyItemTop}>
-                      <Text style={styles.historyItemTitle}>{entry.variantLabel}</Text>
-                      <Text style={styles.historyItemDate}>{formatPlayedAt(entry.playedAt)}</Text>
+                {decoratedHistory.map(
+                  ({ accent, artwork, entry, isCompletedRound, isHighscoreRound, score, variant }, index) => (
+                  <View
+                    key={`${entry.playedAt}-${entry.variantId}-${index}`}
+                    style={[
+                      styles.historyItem,
+                      isCompletedRound && styles.historyItemCompleted,
+                      {
+                        borderColor: isCompletedRound ? 'rgba(108, 201, 164, 0.72)' : `${accent}55`,
+                      },
+                    ]}
+                  >
+                    {isCompletedRound ? (
+                      <View pointerEvents="none" style={styles.historyItemCompletedOverlay} />
+                    ) : null}
+                    {artwork ? (
+                      <View pointerEvents="none" style={styles.historyItemArtworkLayer}>
+                        <View
+                          style={[
+                            styles.historyItemArtworkSlot,
+                            { right: artwork.right, width: artwork.width },
+                          ]}
+                        >
+                          <View
+                            style={[
+                              styles.historyItemArtworkStack,
+                              {
+                                height: artwork.height,
+                                width: typeof artwork.width === 'string' ? '100%' : artwork.width,
+                              },
+                            ]}
+                          >
+                            <Image
+                              blurRadius={14}
+                              resizeMode={artwork.resizeMode ?? 'contain'}
+                              source={artwork.source}
+                              style={[
+                                styles.historyItemArtworkShadow,
+                                {
+                                  height: artwork.height,
+                                  opacity: 0.14,
+                                  tintColor: isCompletedRound
+                                    ? '#d6ffed'
+                                    : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
+                                  width: typeof artwork.width === 'string' ? '100%' : artwork.width,
+                                },
+                              ]}
+                            />
+                            <Image
+                              resizeMode={artwork.resizeMode ?? 'contain'}
+                              source={artwork.source}
+                              style={[
+                                styles.historyItemArtwork,
+                                {
+                                  height: artwork.height,
+                                  opacity: 0.24,
+                                  tintColor: isCompletedRound
+                                    ? '#d6ffed'
+                                    : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
+                                  width: typeof artwork.width === 'string' ? '100%' : artwork.width,
+                                },
+                              ]}
+                            />
+                          </View>
+                        </View>
+                      </View>
+                    ) : null}
+                    <View style={[styles.historyItemAccent, { backgroundColor: accent }]} />
+                    <View style={styles.historyItemPillsFloating}>
+                      <View style={styles.historyItemPills}>
+                        {isHighscoreRound ? (
+                          <View style={styles.historyItemBadgeHighscore}>
+                            <Text style={styles.historyItemBadgeHighscoreText}>Highscore</Text>
+                          </View>
+                        ) : null}
+                        {isCompletedRound ? (
+                          <View style={styles.historyItemBadgeCompleted}>
+                            <Feather color={uiTheme.surface} name="check" size={11} />
+                            <Text style={styles.historyItemBadgeCompletedText}>Completed</Text>
+                          </View>
+                        ) : null}
+                      </View>
                     </View>
-                    <Text style={styles.historyItemPrimary}>
-                      {Math.min(entry.score, entry.totalQuestions)}/{entry.totalQuestions}
-                    </Text>
-                    <Text style={styles.historyItemMeta}>
-                      {Math.min(entry.score, entry.totalQuestions) === entry.totalQuestions
-                        ? 'Perfect run'
-                        : `${Math.min(entry.correctCount, entry.totalQuestions)} correct before the first miss`}
-                    </Text>
+                    <View style={styles.historyItemMainRow}>
+                      <View style={styles.historyItemInfo}>
+                        <Text
+                          numberOfLines={2}
+                          style={[
+                            styles.historyItemTitle,
+                            isCompletedRound && styles.historyItemTitleCompleted,
+                          ]}
+                        >
+                          {variant.label}
+                        </Text>
+                        <Text style={styles.historyItemDate}>{formatPlayedAt(entry.playedAt)}</Text>
+                        <View style={styles.historyItemScoreLine}>
+                          <Text
+                            style={[
+                              styles.historyItemScoreValue,
+                              isCompletedRound && styles.historyItemScoreValueCompleted,
+                            ]}
+                          >
+                            {score}
+                          </Text>
+                          <Text
+                            style={[
+                              styles.historyItemScoreContext,
+                              isCompletedRound && styles.historyItemScoreContextCompleted,
+                            ]}
+                          >
+                            out of {entry.totalQuestions}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
                   </View>
                 ))}
               </ScrollView>
@@ -1358,6 +1604,7 @@ function BottomSheetModal({
   visible: boolean;
 }) {
   const { height: viewportHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [isMounted, setIsMounted] = useState(visible);
   const translateY = useRef(new Animated.Value(viewportHeight)).current;
 
@@ -1418,6 +1665,7 @@ function BottomSheetModal({
           style={[
             styles.sheetCard,
             {
+              paddingBottom: 20 + insets.bottom,
               transform: [{ translateY }],
             },
           ]}
@@ -1548,15 +1796,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   heroBoardSection: {
-    minHeight: 0,
     gap: 6,
-    flexShrink: 1,
-  },
-  heroBoardSectionGlobal: {
-    flex: 1,
-  },
-  heroBoardSectionRegions: {
-    flex: 3,
   },
   heroSectionHeader: {
     flexDirection: 'row',
@@ -1581,16 +1821,21 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   heroBoardRows: {
-    flex: 1,
     minHeight: 0,
     gap: 8,
     flexShrink: 1,
+  },
+  heroBoardRowsRegions: {
+    flex: 3,
   },
   heroBoardRow: {
     flex: 1,
     minHeight: 0,
     flexDirection: 'row',
     gap: 8,
+  },
+  heroBoardRowGlobal: {
+    flex: 1,
   },
   boardMetric: {
     flex: 1,
@@ -1604,6 +1849,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 1,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 6 },
+  },
+  boardMetricPressed: {
+    opacity: 0.94,
   },
   boardMetricCompact: {
     paddingHorizontal: 8,
@@ -1653,17 +1901,23 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
   },
+  boardMetricTitleSlot: {
+    minHeight: 28,
+    marginTop: 6,
+  },
+  boardMetricTitleSlotCompact: {
+    minHeight: 24,
+    marginTop: 4,
+  },
   boardMetricTitle: {
     color: 'rgba(255,255,255,0.84)',
     fontSize: 11,
-    lineHeight: 14,
+    lineHeight: 13,
     fontWeight: '700',
-    marginTop: 8,
   },
   boardMetricTitleCompact: {
     fontSize: 10,
-    lineHeight: 12,
-    marginTop: 5,
+    lineHeight: 11,
   },
   boardMetricTitleWithBadge: {
     paddingRight: 24,
@@ -1672,10 +1926,10 @@ const styles = StyleSheet.create({
     paddingRight: 22,
   },
   boardMetricScoreWrap: {
-    marginTop: 8,
+    marginTop: 4,
   },
   boardMetricScoreWrapCompact: {
-    marginTop: 5,
+    marginTop: 2,
   },
   boardMetricValue: {
     color: uiTheme.surface,
@@ -1706,11 +1960,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   homeButtons: {
-    padding: 10,
-    borderRadius: 26,
-    backgroundColor: 'rgba(8, 23, 35, 0.28)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
     gap: 10,
   },
   sheetBackdrop: {
@@ -1718,7 +1967,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(8, 23, 35, 0.46)',
     justifyContent: 'flex-end',
     paddingHorizontal: 12,
-    paddingBottom: 12,
+    paddingBottom: 0,
     paddingTop: 48,
   },
   sheetCard: {
@@ -1876,6 +2125,40 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(16, 47, 70, 0.16)',
     gap: 14,
+    position: 'relative',
+  },
+  variantPreviewCompleted: {
+    borderColor: 'rgba(108, 201, 164, 0.72)',
+    shadowColor: 'rgba(108, 201, 164, 0.22)',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  variantPreviewCompletedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 24,
+    backgroundColor: 'rgba(57, 110, 95, 0.18)',
+  },
+  variantPreviewBadge: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: 'rgba(108, 201, 164, 0.26)',
+    borderWidth: 1,
+    borderColor: 'rgba(155, 232, 201, 0.34)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  variantPreviewBadgeText: {
+    color: uiTheme.surface,
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   variantPreviewAccent: {
     width: 28,
@@ -1886,6 +2169,9 @@ const styles = StyleSheet.create({
     color: uiTheme.surface,
     fontSize: 18,
     fontWeight: '800',
+  },
+  variantPreviewTitleWithBadge: {
+    paddingRight: 110,
   },
   variantMetaRow: {
     flexDirection: 'row',
@@ -1985,39 +2271,149 @@ const styles = StyleSheet.create({
   },
   historyItem: {
     borderRadius: 20,
-    backgroundColor: uiTheme.surfaceTint,
+    backgroundColor: uiTheme.backgroundStrong,
     borderWidth: 1,
-    borderColor: uiTheme.border,
-    padding: 14,
-  },
-  historyItemTop: {
-    flexDirection: 'row',
+    height: 102,
+    paddingHorizontal: 15,
+    paddingVertical: 12,
+    position: 'relative',
+    overflow: 'hidden',
+    gap: 8,
     justifyContent: 'space-between',
+  },
+  historyItemCompleted: {
+    shadowColor: 'rgba(108, 201, 164, 0.22)',
+    shadowOpacity: 1,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
+  },
+  historyItemCompletedOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    backgroundColor: 'rgba(57, 110, 95, 0.18)',
+  },
+  historyItemArtworkLayer: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  historyItemArtworkSlot: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  historyItemArtworkStack: {
+    position: 'relative',
+  },
+  historyItemArtworkShadow: {
+    position: 'absolute',
+  },
+  historyItemArtwork: {
+    position: 'absolute',
+  },
+  historyItemAccent: {
+    width: 26,
+    height: 4,
+    borderRadius: 999,
+  },
+  historyItemMainRow: {
+    justifyContent: 'center',
     alignItems: 'flex-start',
-    gap: 12,
+  },
+  historyItemInfo: {
+    flexShrink: 1,
+    maxWidth: '58%',
+    minWidth: 0,
+    justifyContent: 'center',
   },
   historyItemTitle: {
-    color: uiTheme.text,
-    fontSize: 15,
+    color: uiTheme.surface,
+    fontSize: 14,
+    lineHeight: 16,
     fontWeight: '800',
-    flex: 1,
+  },
+  historyItemTitleCompleted: {
+    color: '#d6ffed',
+  },
+  historyItemPillsFloating: {
+    position: 'absolute',
+    top: 12,
+    right: 14,
+    zIndex: 2,
+  },
+  historyItemPills: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flexShrink: 0,
+    minHeight: 19,
   },
   historyItemDate: {
-    color: uiTheme.textMuted,
-    fontSize: 12,
+    color: 'rgba(255,255,255,0.56)',
+    fontSize: 10,
     fontWeight: '600',
+    marginTop: 4,
   },
-  historyItemPrimary: {
-    color: uiTheme.text,
-    fontSize: 19,
+  historyItemBadgeHighscore: {
+    borderRadius: 999,
+    backgroundColor: 'rgba(246, 225, 142, 0.28)',
+    borderWidth: 1,
+    borderColor: 'rgba(247, 223, 133, 0.5)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  historyItemBadgeHighscoreText: {
+    color: '#f6e18e',
+    fontSize: 9,
     fontWeight: '800',
-    marginTop: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
-  historyItemMeta: {
-    color: uiTheme.textMuted,
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 5,
+  historyItemBadgeCompleted: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(108, 201, 164, 0.26)',
+    borderWidth: 1,
+    borderColor: 'rgba(155, 232, 201, 0.34)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  historyItemBadgeCompletedText: {
+    color: uiTheme.surface,
+    fontSize: 9,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  historyItemScoreLine: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 6,
+    minWidth: 0,
+    justifyContent: 'flex-start',
+    marginTop: 8,
+  },
+  historyItemScoreValue: {
+    color: uiTheme.surface,
+    fontSize: 22,
+    lineHeight: 24,
+    fontWeight: '900',
+  },
+  historyItemScoreValueCompleted: {
+    color: '#b7ffe0',
+  },
+  historyItemScoreContext: {
+    color: 'rgba(255,255,255,0.64)',
+    fontSize: 11,
+    lineHeight: 12,
+    fontWeight: '700',
+  },
+  historyItemScoreContextCompleted: {
+    color: 'rgba(203, 255, 232, 0.72)',
   },
   gameScreen: {
     flex: 1,
