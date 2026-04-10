@@ -24,7 +24,6 @@ import {
   buildQuestionSet,
   gameVariants,
   getVariantById,
-  getVariantSubtitle,
   type GameMode,
   type GameVariant,
   type PlaceOption,
@@ -71,11 +70,18 @@ type GameSession = {
 
 type GameSummary = {
   correctCount: number;
+  durationMs: number;
   isNewBest: boolean;
   score: number;
   totalQuestions: number;
   variant: GameVariant;
 };
+
+type HistoryRegionFilter =
+  | 'all'
+  | 'globe-world'
+  | 'globe-world-us-states'
+  | Exclude<GameVariant['region'], 'world'>;
 
 const uiTheme = {
   background: '#f3eee6',
@@ -375,6 +381,55 @@ function formatPlayedAt(value: string) {
   }
 }
 
+function formatDurationMs(value: number) {
+  const totalSeconds = Math.max(0, Math.floor(value / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function normalizePlaceLabel(value: string) {
+  return (value || '').trim().toLowerCase();
+}
+
+function getGamePromptTargetLabel(variant: GameVariant) {
+  if (variant.region === US_STATES_REGION_KEY) {
+    return 'state';
+  }
+
+  if (variant.mode === 'globe' && variant.showUsStates) {
+    return 'country/state';
+  }
+
+  return 'country';
+}
+
+function getGamePlaceLabel(
+  place: Pick<PlaceOption, 'displayName' | 'kind'>,
+  questionSet: readonly Pick<PlaceOption, 'displayName' | 'kind'>[]
+) {
+  const normalizedLabel = normalizePlaceLabel(place.displayName);
+  const hasMatchingNameAcrossKinds = questionSet.some(
+    (entry) =>
+      entry.kind !== place.kind &&
+      normalizePlaceLabel(entry.displayName) === normalizedLabel
+  );
+
+  if (!hasMatchingNameAcrossKinds) {
+    return place.displayName;
+  }
+
+  return place.kind === 'state'
+    ? `${place.displayName} (U.S. state)`
+    : `${place.displayName} (country)`;
+}
+
 function createGameSession(variant: GameVariant): GameSession {
   return {
     bestStreak: 0,
@@ -619,6 +674,31 @@ function getRegionPickerLabel(variant: GameVariant) {
   return variant.label;
 }
 
+function getHistoryRegionLabel(filter: HistoryRegionFilter) {
+  if (filter === 'globe-world') {
+    return 'World';
+  }
+
+  if (filter === 'globe-world-us-states') {
+    return 'World & U.S. states';
+  }
+
+  if (filter === 'north-america') {
+    return 'N. America';
+  }
+
+  if (filter === 'south-america') {
+    return 'S. America';
+  }
+
+  if (filter === US_STATES_REGION_KEY) {
+    return US_STATES_REGION_LABEL;
+  }
+
+  const variant = gameVariants.find((item) => item.region === filter);
+  return variant?.label ?? filter;
+}
+
 function AppContent() {
   const { height: screenHeight } = useWindowDimensions();
   const [mode, setMode] = useState<GameMode>('globe');
@@ -634,10 +714,15 @@ function AppContent() {
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
   const [startModeOptionsHeight, setStartModeOptionsHeight] = useState(94);
   const [homeBoardsAreaHeight, setHomeBoardsAreaHeight] = useState(0);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [historyRegionFilter, setHistoryRegionFilter] = useState<HistoryRegionFilter>('all');
+  const [isHistoryRegionDropdownOpen, setIsHistoryRegionDropdownOpen] = useState(false);
 
   const highscoresRef = useRef<HighscoreMap>({});
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
   const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const sessionStartedAt = session?.startedAt ?? null;
+  const summaryDurationMs = summary?.durationMs ?? null;
 
   const selectedVariantId = resolveVariantId(mode, selectedRegion, includeUsStatesOnGlobe);
   const selectedVariant = useMemo(() => getVariantById(selectedVariantId), [selectedVariantId]);
@@ -700,6 +785,24 @@ function AppContent() {
     displayHighscores[selectedVariant.id]?.bestScore ?? 0,
     selectedVariant.placeCount
   );
+  const historyRegionFilterOptions = useMemo<HistoryRegionFilter[]>(
+    () => [
+      'all',
+      'globe-world',
+      'globe-world-us-states',
+      'europe',
+      'africa',
+      'asia',
+      'north-america',
+      'south-america',
+      'oceania',
+      US_STATES_REGION_KEY,
+    ],
+    []
+  );
+  const activeHistoryRegionFilter = historyRegionFilterOptions.includes(historyRegionFilter)
+    ? historyRegionFilter
+    : 'all';
   const isSelectedVariantCompleted =
     selectedVariant.placeCount > 0 && selectedVariantBestScore >= selectedVariant.placeCount;
   const isCompactBoardLayout = homeBoardsAreaHeight > 0 ? homeBoardsAreaHeight < 320 : screenHeight < 760;
@@ -737,6 +840,45 @@ function AppContent() {
       };
     });
   }, [gameHistory]);
+  const filteredDecoratedHistory = useMemo(
+    () =>
+      decoratedHistory.filter(({ variant }) => {
+        if (activeHistoryRegionFilter === 'all') {
+          return true;
+        }
+
+        if (activeHistoryRegionFilter === 'globe-world') {
+          return variant.id === 'globe-world';
+        }
+
+        if (activeHistoryRegionFilter === 'globe-world-us-states') {
+          return variant.id === 'globe-world-us-states';
+        }
+
+        return variant.region === activeHistoryRegionFilter;
+      }),
+    [activeHistoryRegionFilter, decoratedHistory]
+  );
+  const totalHistoryCount = gameHistory.length;
+  const visibleHistoryCount = filteredDecoratedHistory.length;
+
+  useEffect(() => {
+    if (historyRegionFilter === 'all') {
+      return;
+    }
+
+    if (!historyRegionFilterOptions.includes(historyRegionFilter)) {
+      setHistoryRegionFilter('all');
+    }
+  }, [historyRegionFilter, historyRegionFilterOptions]);
+
+  useEffect(() => {
+    if (isHistoryModalOpen) {
+      return;
+    }
+
+    setIsHistoryRegionDropdownOpen(false);
+  }, [isHistoryModalOpen]);
 
   const regionBoardRows = useMemo(
     () =>
@@ -755,6 +897,29 @@ function AppContent() {
   useEffect(() => {
     gameHistoryRef.current = gameHistory;
   }, [gameHistory]);
+
+  useEffect(() => {
+    if (sessionStartedAt === null) {
+      setElapsedMs(0);
+      return;
+    }
+
+    if (summaryDurationMs !== null) {
+      setElapsedMs(summaryDurationMs);
+      return;
+    }
+
+    const updateElapsedMs = () => {
+      setElapsedMs(Math.max(0, Date.now() - sessionStartedAt));
+    };
+
+    updateElapsedMs();
+    const intervalId = setInterval(updateElapsedMs, 250);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [sessionStartedAt, summaryDurationMs]);
 
   useEffect(() => {
     let isActive = true;
@@ -795,6 +960,7 @@ function AppContent() {
 
   function beginGame(variant: GameVariant) {
     clearPendingTimers();
+    setElapsedMs(0);
     setSummary(null);
     setIsStartModalOpen(false);
     setSession(createGameSession(variant));
@@ -831,6 +997,8 @@ function AppContent() {
         return currentSession;
       }
 
+      const answeredAt = Date.now();
+
       if (selection.id === currentQuestion.id) {
         const nextScore = currentSession.score + 1;
         const nextStreak = currentSession.streak + 1;
@@ -839,7 +1007,10 @@ function AppContent() {
           ...currentSession,
           bestStreak: Math.max(currentSession.bestStreak, nextStreak),
           correctCount: currentSession.correctCount + 1,
-          feedback: { kind: 'correct', label: currentQuestion.displayName },
+          feedback: {
+            kind: 'correct',
+            label: getGamePlaceLabel(currentQuestion, currentSession.questionSet),
+          },
           locked: true,
           score: nextScore,
           solvedPlaceIds,
@@ -856,7 +1027,7 @@ function AppContent() {
               ...updatedSession,
               feedback: null,
               locked: true,
-            });
+            }, answeredAt);
             return;
           }
 
@@ -881,7 +1052,13 @@ function AppContent() {
 
       const updatedSession: GameSession = {
         ...currentSession,
-        feedback: { kind: 'wrong', label: selection.label },
+        feedback: {
+          kind: 'wrong',
+          label: getGamePlaceLabel(
+            { displayName: selection.label, kind: selection.kind },
+            currentSession.questionSet
+          ),
+        },
         locked: true,
         misses: currentSession.misses + 1,
         score: currentSession.score,
@@ -894,16 +1071,16 @@ function AppContent() {
           ...updatedSession,
           feedback: null,
           wrongFlashId: null,
-        });
+        }, answeredAt);
       }, 460);
 
       return updatedSession;
     });
   }
 
-  function finalizeGame(finalSession: GameSession) {
+  function finalizeGame(finalSession: GameSession, finishedAt = Date.now()) {
     clearPendingTimers();
-    const durationMs = 0;
+    const durationMs = Math.max(0, finishedAt - finalSession.startedAt);
     const accuracy = finalSession.questionSet.length
       ? (finalSession.correctCount / finalSession.questionSet.length) * 100
       : 0;
@@ -924,11 +1101,13 @@ function AppContent() {
 
     setSummary({
       correctCount: finalSession.correctCount,
+      durationMs,
       isNewBest,
       score,
       totalQuestions: finalSession.questionSet.length,
       variant: finalSession.variant,
     });
+    setElapsedMs(durationMs);
 
     const resultForStorage: CompletedGameResult = {
       accuracy,
@@ -969,6 +1148,7 @@ function AppContent() {
 
   function goBackToDashboard() {
     clearPendingTimers();
+    setElapsedMs(0);
     setSummary(null);
     setSession(null);
   }
@@ -986,6 +1166,20 @@ function AppContent() {
   }
 
   const currentQuestion = session?.questionSet[session.currentIndex] ?? null;
+  const currentQuestionLabel =
+    session && currentQuestion
+      ? getGamePlaceLabel(currentQuestion, session.questionSet)
+      : '';
+  const gameInstructionCopy = session
+    ? `Click the above ${getGamePromptTargetLabel(session.variant)} on the map.`
+    : '';
+  const sessionVariantBestScore = session
+    ? Math.min(displayHighscores[session.variant.id]?.bestScore ?? 0, session.questionSet.length)
+    : 0;
+  const summaryModeArtwork = summary ? getHistoryArtwork(summary.variant) : null;
+  const summaryModeArtworkTint = summary
+    ? mixHexColor(summary.variant.accent, '#ffffff', 0.5) || '#dbe6ef'
+    : '#dbe6ef';
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -1008,23 +1202,22 @@ function AppContent() {
           <View style={styles.gameTopBar}>
             <Pressable style={styles.iconPill} onPress={goBackToDashboard}>
               <Feather color={uiTheme.surface} name="chevron-left" size={18} />
-              <Text style={styles.iconPillText}>Dashboard</Text>
+              <Text style={styles.iconPillText}>Leave</Text>
             </Pressable>
             <View style={styles.topBarMetrics}>
-              <MetricChip icon="target" label={`${session.currentIndex + 1}/${session.questionSet.length}`} />
-              <MetricChip icon="zap" label={`${session.score}`} />
+              <MetricChip icon="clock" label={formatDurationMs(elapsedMs)} stableWidth />
             </View>
           </View>
 
           <View style={styles.promptCard}>
             <Text style={styles.promptEyebrow}>{session.variant.label}</Text>
             <Text style={styles.promptTitle}>
-              {summary ? 'Run Complete' : `Find ${currentQuestion?.displayName ?? ''}`}
+              {summary ? 'Run Complete' : currentQuestionLabel}
             </Text>
             <Text style={styles.promptSubtitle}>
               {summary
-                ? `Score ${summary.score}/${summary.totalQuestions}`
-                : `First wrong answer ends the run.`}
+                ? `Score ${summary.score}/${summary.totalQuestions} in ${formatDurationMs(summary.durationMs)}`
+                : gameInstructionCopy}
             </Text>
           </View>
 
@@ -1055,19 +1248,16 @@ function AppContent() {
 
           <View style={styles.gameBottomRow}>
             <StatCard
+              icon="target"
               label="Score"
               tone="accent"
-              value={String(session.score)}
+              value={`${session.score} / ${session.questionSet.length}`}
             />
             <StatCard
-              label="Remaining"
+              icon="trophy"
+              label="Highscore"
               tone="surface"
-              value={String(session.questionSet.length - session.correctCount)}
-            />
-            <StatCard
-              label="Total"
-              tone="surface"
-              value={String(session.questionSet.length)}
+              value={String(sessionVariantBestScore)}
             />
           </View>
 
@@ -1090,36 +1280,101 @@ function AppContent() {
           {summary ? (
             <View style={styles.summaryOverlay}>
               <View style={styles.summaryCard}>
-                <View style={styles.summaryBadgeRow}>
-                  <View style={styles.summaryBadge}>
-                    <MaterialCommunityIcons
-                      color={summary.isNewBest ? uiTheme.backgroundStrong : uiTheme.text}
-                      name={summary.isNewBest ? 'trophy-outline' : 'map-search-outline'}
-                      size={20}
-                    />
-                    <Text style={styles.summaryBadgeText}>
-                      {summary.isNewBest ? 'New Highscore' : 'Run Locked In'}
-                    </Text>
+                <View style={styles.summaryHeader}>
+                  <Text style={styles.summaryTitle}>Game summary</Text>
+                  {summary.isNewBest ? (
+                    <View style={styles.summaryHighscoreBadge}>
+                      <MaterialCommunityIcons color="#976200" name="trophy-outline" size={15} />
+                      <Text style={styles.summaryHighscoreBadgeText}>Highscore</Text>
+                    </View>
+                  ) : null}
+                </View>
+
+                <View style={styles.summaryModeCard}>
+                  {summaryModeArtwork ? (
+                    <View pointerEvents="none" style={styles.summaryModeArtworkLayer}>
+                      <View
+                        style={[
+                          styles.summaryModeArtworkSlot,
+                          {
+                            right: summaryModeArtwork.right,
+                            width: summaryModeArtwork.width,
+                          },
+                        ]}
+                      >
+                        <View
+                          style={[
+                            styles.summaryModeArtworkStack,
+                            {
+                              height: summaryModeArtwork.height,
+                              width:
+                                typeof summaryModeArtwork.width === 'string'
+                                  ? '100%'
+                                  : summaryModeArtwork.width,
+                            },
+                          ]}
+                        >
+                          <Image
+                            blurRadius={12}
+                            resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                            source={summaryModeArtwork.source}
+                            style={[
+                              styles.summaryModeArtworkShadow,
+                              {
+                                height: summaryModeArtwork.height,
+                                tintColor: summaryModeArtworkTint,
+                                width:
+                                  typeof summaryModeArtwork.width === 'string'
+                                    ? '100%'
+                                    : summaryModeArtwork.width,
+                              },
+                            ]}
+                          />
+                          <Image
+                            resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                            source={summaryModeArtwork.source}
+                            style={[
+                              styles.summaryModeArtwork,
+                              {
+                                height: summaryModeArtwork.height,
+                                tintColor: summaryModeArtworkTint,
+                                width:
+                                  typeof summaryModeArtwork.width === 'string'
+                                    ? '100%'
+                                    : summaryModeArtwork.width,
+                              },
+                            ]}
+                          />
+                        </View>
+                      </View>
+                    </View>
+                  ) : null}
+
+                  <View style={styles.summaryModeContent}>
+                    <View style={[styles.summaryModeAccent, { backgroundColor: summary.variant.accent }]} />
+                    <Text style={styles.summaryModeValue}>{summary.variant.shortLabel}</Text>
+                    <Text style={styles.summaryModeLabel}>Game mode</Text>
                   </View>
                 </View>
 
-                <Text style={styles.summaryTitle}>{summary.variant.label}</Text>
-                <Text style={styles.summarySubtitle}>{getVariantSubtitle(summary.variant)}</Text>
-
                 <View style={styles.summaryMetricsGrid}>
-                  <SummaryMetric label="Correct" value={String(summary.score)} />
-                  <SummaryMetric label="Total" value={String(summary.totalQuestions)} />
+                  <SummaryMetric
+                    icon="target"
+                    label="Score"
+                    tone="score"
+                    value={`${summary.score} / ${summary.totalQuestions}`}
+                  />
+                  <SummaryMetric
+                    icon="clock"
+                    label="Time"
+                    tone="time"
+                    value={formatDurationMs(summary.durationMs)}
+                  />
                 </View>
-
-                <Text style={styles.summaryDetail}>
-                  {summary.score === summary.totalQuestions
-                    ? 'Perfect run.'
-                    : `${summary.correctCount} correct before the first miss.`}
-                </Text>
 
                 <View style={styles.summaryButtonRow}>
                   <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
-                  <SecondaryButton label="Dashboard" onPress={handleSummaryDashboard} />
+                  <SecondaryButton label="Leave" onPress={handleSummaryDashboard} />
                 </View>
               </View>
             </View>
@@ -1354,155 +1609,251 @@ function AppContent() {
             </View>
       </BottomSheetModal>
 
-      <BottomSheetModal visible={isHistoryModalOpen} onClose={() => setIsHistoryModalOpen(false)}>
+      <BottomSheetModal
+        visible={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+        fillHeight
+      >
             <Text style={styles.sheetEyebrow}>Game history</Text>
             <Text style={styles.sheetTitle}>Played games</Text>
-            <Text style={styles.sheetBody}>
-              List of all games played
-            </Text>
 
-            {isLoadingHistory ? (
-              <View style={styles.loadingCard}>
-                <ActivityIndicator color={uiTheme.backgroundStrong} size="small" />
-                <Text style={styles.loadingLabel}>Loading recent runs...</Text>
-              </View>
-            ) : gameHistory.length === 0 ? (
-              <View style={styles.emptyHistoryCard}>
-                <Text style={styles.emptyHistoryTitle}>No history yet</Text>
-                <Text style={styles.emptyHistoryBody}>
-                  Finish a round and it will show up here.
-                </Text>
-              </View>
-            ) : (
-              <ScrollView
-                style={styles.historyList}
-                contentContainerStyle={styles.historyListContent}
-                showsVerticalScrollIndicator={false}
-              >
-                {decoratedHistory.map(
-                  ({ accent, artwork, entry, isCompletedRound, isHighscoreRound, score, variant }, index) => (
-                  <View
-                    key={`${entry.playedAt}-${entry.variantId}-${index}`}
-                    style={[
-                      styles.historyItem,
-                      isCompletedRound && styles.historyItemCompleted,
-                      {
-                        borderColor: isCompletedRound ? 'rgba(108, 201, 164, 0.72)' : `${accent}55`,
-                      },
-                    ]}
-                  >
-                    {isCompletedRound ? (
-                      <View pointerEvents="none" style={styles.historyItemCompletedOverlay} />
+            <View style={styles.historySheetContent}>
+              <View style={styles.historyToolbar}>
+                <HistoryStatCard
+                  value={isLoadingHistory ? '...' : `${visibleHistoryCount} games`}
+                />
+
+                {!isLoadingHistory ? (
+                  <View style={styles.historyDropdownWrap}>
+                    <Pressable
+                      style={styles.historyDropdownTrigger}
+                      onPress={() => setIsHistoryRegionDropdownOpen((currentValue) => !currentValue)}
+                    >
+                      <Text style={styles.historyDropdownValue}>
+                        {activeHistoryRegionFilter === 'all'
+                          ? 'All regions'
+                          : getHistoryRegionLabel(activeHistoryRegionFilter)}
+                      </Text>
+                      <Feather
+                        color={uiTheme.backgroundStrong}
+                        name={isHistoryRegionDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                        size={16}
+                      />
+                    </Pressable>
+
+                    {isHistoryRegionDropdownOpen ? (
+                      <View style={styles.historyDropdownMenu}>
+                        {historyRegionFilterOptions.map((option) => {
+                          const isActive = activeHistoryRegionFilter === option;
+                          return (
+                            <Pressable
+                              key={`history-region-${option}`}
+                              style={[styles.historyDropdownOption, isActive && styles.historyDropdownOptionActive]}
+                              onPress={() => {
+                                setHistoryRegionFilter(option);
+                                setIsHistoryRegionDropdownOpen(false);
+                              }}
+                            >
+                              <Text
+                                style={[
+                                  styles.historyDropdownOptionText,
+                                  isActive && styles.historyDropdownOptionTextActive,
+                                ]}
+                              >
+                                {option === 'all' ? 'All' : getHistoryRegionLabel(option)}
+                              </Text>
+                            </Pressable>
+                          );
+                        })}
+                      </View>
                     ) : null}
-                    {artwork ? (
-                      <View pointerEvents="none" style={styles.historyItemArtworkLayer}>
-                        <View
-                          style={[
-                            styles.historyItemArtworkSlot,
-                            { right: artwork.right, width: artwork.width },
-                          ]}
-                        >
+                  </View>
+                ) : null}
+              </View>
+
+              {isLoadingHistory ? (
+                <View style={styles.historyStateWrap}>
+                  <View style={styles.loadingCard}>
+                    <ActivityIndicator color={uiTheme.backgroundStrong} size="small" />
+                    <Text style={styles.loadingLabel}>Loading recent runs...</Text>
+                  </View>
+                </View>
+              ) : totalHistoryCount === 0 ? (
+                <View style={styles.historyStateWrap}>
+                  <View style={styles.emptyHistoryCard}>
+                    <Text style={styles.emptyHistoryTitle}>No history yet</Text>
+                    <Text style={styles.emptyHistoryBody}>
+                      Finish a round and it will show up here.
+                    </Text>
+                  </View>
+                </View>
+              ) : visibleHistoryCount === 0 ? (
+                <View style={styles.historyStateWrap}>
+                  <View style={styles.emptyHistoryCard}>
+                    <Text style={styles.emptyHistoryTitle}>No matches</Text>
+                    <Text style={styles.emptyHistoryBody}>
+                      No runs match the current region filter.
+                    </Text>
+                  </View>
+                </View>
+              ) : (
+                <ScrollView
+                  style={styles.historyList}
+                  contentContainerStyle={styles.historyListContent}
+                  onScrollBeginDrag={() => setIsHistoryRegionDropdownOpen(false)}
+                  showsVerticalScrollIndicator={false}
+                >
+                  {filteredDecoratedHistory.map(
+                    ({ accent, artwork, entry, isCompletedRound, isHighscoreRound, score, variant }, index) => (
+                    <View
+                      key={`${entry.playedAt}-${entry.variantId}-${index}`}
+                      style={[
+                        styles.historyItem,
+                        isCompletedRound && styles.historyItemCompleted,
+                        {
+                          borderColor: isCompletedRound ? 'rgba(108, 201, 164, 0.72)' : `${accent}55`,
+                        },
+                      ]}
+                    >
+                      {isCompletedRound ? (
+                        <View pointerEvents="none" style={styles.historyItemCompletedOverlay} />
+                      ) : null}
+                      {artwork ? (
+                        <View pointerEvents="none" style={styles.historyItemArtworkLayer}>
                           <View
                             style={[
-                              styles.historyItemArtworkStack,
-                              {
-                                height: artwork.height,
-                                width: typeof artwork.width === 'string' ? '100%' : artwork.width,
-                              },
+                              styles.historyItemArtworkSlot,
+                              { right: artwork.right, width: artwork.width },
                             ]}
                           >
-                            <Image
-                              blurRadius={14}
-                              resizeMode={artwork.resizeMode ?? 'contain'}
-                              source={artwork.source}
+                            <View
                               style={[
-                                styles.historyItemArtworkShadow,
+                                styles.historyItemArtworkStack,
                                 {
                                   height: artwork.height,
-                                  opacity: 0.14,
-                                  tintColor: isCompletedRound
-                                    ? '#d6ffed'
-                                    : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
                                   width: typeof artwork.width === 'string' ? '100%' : artwork.width,
                                 },
                               ]}
-                            />
-                            <Image
-                              resizeMode={artwork.resizeMode ?? 'contain'}
-                              source={artwork.source}
+                            >
+                              <Image
+                                blurRadius={14}
+                                resizeMode={artwork.resizeMode ?? 'contain'}
+                                source={artwork.source}
+                                style={[
+                                  styles.historyItemArtworkShadow,
+                                  {
+                                    height: artwork.height,
+                                    opacity: 0.14,
+                                    tintColor: isCompletedRound
+                                      ? '#d6ffed'
+                                      : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
+                                    width: typeof artwork.width === 'string' ? '100%' : artwork.width,
+                                  },
+                                ]}
+                              />
+                              <Image
+                                resizeMode={artwork.resizeMode ?? 'contain'}
+                                source={artwork.source}
+                                style={[
+                                  styles.historyItemArtwork,
+                                  {
+                                    height: artwork.height,
+                                    opacity: 0.24,
+                                    tintColor: isCompletedRound
+                                      ? '#d6ffed'
+                                      : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
+                                    width: typeof artwork.width === 'string' ? '100%' : artwork.width,
+                                  },
+                                ]}
+                              />
+                            </View>
+                          </View>
+                        </View>
+                      ) : null}
+                      <View style={[styles.historyItemAccent, { backgroundColor: accent }]} />
+                      <View style={styles.historyItemPillsFloating}>
+                        <View style={styles.historyItemPills}>
+                          {isHighscoreRound ? (
+                            <View style={styles.historyItemBadgeHighscore}>
+                              <Text style={styles.historyItemBadgeHighscoreText}>Highscore</Text>
+                            </View>
+                          ) : null}
+                          {isCompletedRound ? (
+                            <View style={styles.historyItemBadgeCompleted}>
+                              <Feather color={uiTheme.surface} name="check" size={11} />
+                              <Text style={styles.historyItemBadgeCompletedText}>Completed</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                      <View style={styles.historyItemMainRow}>
+                        <View style={styles.historyItemInfo}>
+                          <Text
+                            numberOfLines={2}
+                            style={[
+                              styles.historyItemTitle,
+                              isCompletedRound && styles.historyItemTitleCompleted,
+                            ]}
+                          >
+                            {variant.label}
+                          </Text>
+                          <Text style={styles.historyItemDate}>{formatPlayedAt(entry.playedAt)}</Text>
+                          <View style={styles.historyItemScoreLine}>
+                            <Text
                               style={[
-                                styles.historyItemArtwork,
-                                {
-                                  height: artwork.height,
-                                  opacity: 0.24,
-                                  tintColor: isCompletedRound
-                                    ? '#d6ffed'
-                                    : mixHexColor(accent, '#ffffff', 0.5) || '#dbe6ef',
-                                  width: typeof artwork.width === 'string' ? '100%' : artwork.width,
-                                },
+                                styles.historyItemScoreValue,
+                                isCompletedRound && styles.historyItemScoreValueCompleted,
                               ]}
-                            />
+                            >
+                              {score}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.historyItemScoreContext,
+                                isCompletedRound && styles.historyItemScoreContextCompleted,
+                              ]}
+                            >
+                              out of {entry.totalQuestions}
+                            </Text>
                           </View>
                         </View>
                       </View>
-                    ) : null}
-                    <View style={[styles.historyItemAccent, { backgroundColor: accent }]} />
-                    <View style={styles.historyItemPillsFloating}>
-                      <View style={styles.historyItemPills}>
-                        {isHighscoreRound ? (
-                          <View style={styles.historyItemBadgeHighscore}>
-                            <Text style={styles.historyItemBadgeHighscoreText}>Highscore</Text>
-                          </View>
-                        ) : null}
-                        {isCompletedRound ? (
-                          <View style={styles.historyItemBadgeCompleted}>
-                            <Feather color={uiTheme.surface} name="check" size={11} />
-                            <Text style={styles.historyItemBadgeCompletedText}>Completed</Text>
-                          </View>
-                        ) : null}
-                      </View>
-                    </View>
-                    <View style={styles.historyItemMainRow}>
-                      <View style={styles.historyItemInfo}>
+                      <View
+                        style={[
+                          styles.historyItemDurationChip,
+                          isCompletedRound && styles.historyItemDurationChipCompleted,
+                        ]}
+                      >
+                        <Feather
+                          color={isCompletedRound ? '#d6ffed' : 'rgba(255,255,255,0.74)'}
+                          name="clock"
+                          size={12}
+                        />
                         <Text
-                          numberOfLines={2}
                           style={[
-                            styles.historyItemTitle,
-                            isCompletedRound && styles.historyItemTitleCompleted,
+                            styles.historyItemDurationText,
+                            isCompletedRound && styles.historyItemDurationTextCompleted,
                           ]}
                         >
-                          {variant.label}
+                          {formatDurationMs(entry.durationMs)}
                         </Text>
-                        <Text style={styles.historyItemDate}>{formatPlayedAt(entry.playedAt)}</Text>
-                        <View style={styles.historyItemScoreLine}>
-                          <Text
-                            style={[
-                              styles.historyItemScoreValue,
-                              isCompletedRound && styles.historyItemScoreValueCompleted,
-                            ]}
-                          >
-                            {score}
-                          </Text>
-                          <Text
-                            style={[
-                              styles.historyItemScoreContext,
-                              isCompletedRound && styles.historyItemScoreContextCompleted,
-                            ]}
-                          >
-                            out of {entry.totalQuestions}
-                          </Text>
-                        </View>
                       </View>
                     </View>
-                  </View>
-                ))}
-              </ScrollView>
-            )}
+                  ))}
+                </ScrollView>
+              )}
 
-            <SecondaryButton
-              label="Close"
-              onPress={() => setIsHistoryModalOpen(false)}
-            />
+              <View pointerEvents="box-none" style={styles.historyFooterOverlay}>
+                <LinearGradient
+                  colors={['rgba(255, 250, 242, 0)', 'rgba(255, 250, 242, 0.94)', uiTheme.surface]}
+                  style={StyleSheet.absoluteFill}
+                />
+                <SecondaryButton
+                  label="Close"
+                  onPress={() => setIsHistoryModalOpen(false)}
+                />
+              </View>
+            </View>
       </BottomSheetModal>
     </SafeAreaView>
   );
@@ -1553,20 +1904,40 @@ function MetaTile({
   );
 }
 
-function MetricChip({ icon, label }: { icon: 'target' | 'zap'; label: string }) {
+function MetricChip({
+  icon,
+  label,
+  stableWidth = false,
+}: {
+  icon: 'clock' | 'target';
+  label: string;
+  stableWidth?: boolean;
+}) {
   return (
-    <View style={styles.metricChip}>
+    <View style={[styles.metricChip, stableWidth && styles.metricChipStableWidth]}>
       <Feather color={uiTheme.surface} name={icon} size={15} />
-      <Text style={styles.metricChipLabel}>{label}</Text>
+      <Text style={[styles.metricChipLabel, stableWidth && styles.metricChipLabelStableWidth]}>
+        {label}
+      </Text>
+    </View>
+  );
+}
+
+function HistoryStatCard({ value }: { value: string }) {
+  return (
+    <View style={styles.historyStatCard}>
+      <Text style={styles.historyStatValue}>{value}</Text>
     </View>
   );
 }
 
 function StatCard({
+  icon,
   label,
   tone,
   value,
 }: {
+  icon: 'target' | 'trophy';
   label: string;
   tone: 'accent' | 'danger' | 'surface';
   value: string;
@@ -1579,15 +1950,50 @@ function StatCard({
         tone === 'danger' && styles.statCardDanger,
       ]}
     >
+      <View
+        style={[
+          styles.statCardIconWrap,
+          icon === 'target' ? styles.statCardIconWrapScore : styles.statCardIconWrapHighscore,
+        ]}
+      >
+        {icon === 'target' ? (
+          <Feather color="#ffd3af" name="target" size={16} />
+        ) : (
+          <MaterialCommunityIcons color="#d9b04b" name="trophy-outline" size={16} />
+        )}
+      </View>
       <Text style={styles.statCardValue}>{value}</Text>
       <Text style={styles.statCardLabel}>{label}</Text>
     </View>
   );
 }
 
-function SummaryMetric({ label, value }: { label: string; value: string }) {
+function SummaryMetric({
+  icon,
+  label,
+  tone,
+  value,
+}: {
+  icon: 'clock' | 'target';
+  label: string;
+  tone: 'score' | 'time';
+  value: string;
+}) {
   return (
-    <View style={styles.summaryMetric}>
+    <View
+      style={[
+        styles.summaryMetric,
+        tone === 'score' ? styles.summaryMetricScore : styles.summaryMetricTime,
+      ]}
+    >
+      <View
+        style={[
+          styles.summaryMetricIconWrap,
+          tone === 'score' ? styles.summaryMetricIconWrapScore : styles.summaryMetricIconWrapTime,
+        ]}
+      >
+        <Feather color={tone === 'score' ? '#ffd3af' : '#d6ffed'} name={icon} size={16} />
+      </View>
       <Text style={styles.summaryMetricValue}>{value}</Text>
       <Text style={styles.summaryMetricLabel}>{label}</Text>
     </View>
@@ -1596,10 +2002,12 @@ function SummaryMetric({ label, value }: { label: string; value: string }) {
 
 function BottomSheetModal({
   children,
+  fillHeight = false,
   onClose,
   visible,
 }: {
   children: ReactNode;
+  fillHeight?: boolean;
   onClose: () => void;
   visible: boolean;
 }) {
@@ -1664,6 +2072,7 @@ function BottomSheetModal({
         <Animated.View
           style={[
             styles.sheetCard,
+            fillHeight && styles.sheetCardFillHeight,
             {
               paddingBottom: 20 + insets.bottom,
               transform: [{ translateY }],
@@ -1980,6 +2389,9 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     shadowOffset: { width: 0, height: 16 },
   },
+  sheetCardFillHeight: {
+    height: '92%',
+  },
   sheetEyebrow: {
     color: uiTheme.backgroundStrong,
     textTransform: 'uppercase',
@@ -2261,19 +2673,113 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginTop: 6,
   },
-  historyList: {
+  historySheetContent: {
+    flex: 1,
+    minHeight: 0,
     marginTop: 16,
-    maxHeight: 420,
+  },
+  historyToolbar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 14,
+    position: 'relative',
+    elevation: 4,
+    zIndex: 4,
+  },
+  historyStatCard: {
+    borderRadius: 12,
+    backgroundColor: uiTheme.surfaceTint,
+    borderWidth: 1,
+    borderColor: uiTheme.border,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    minWidth: 86,
+  },
+  historyStatValue: {
+    color: uiTheme.text,
+    fontSize: 13,
+    lineHeight: 15,
+    fontWeight: '800',
+  },
+  historyDropdownWrap: {
+    flex: 1,
+    minWidth: 0,
+    position: 'relative',
+    zIndex: 5,
+  },
+  historyDropdownTrigger: {
+    borderRadius: 12,
+    backgroundColor: uiTheme.surfaceTint,
+    borderWidth: 1,
+    borderColor: uiTheme.border,
+    minHeight: 40,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  historyDropdownValue: {
+    color: uiTheme.text,
+    fontSize: 13,
+    fontWeight: '700',
+    flexShrink: 1,
+    marginRight: 8,
+  },
+  historyDropdownMenu: {
+    position: 'absolute',
+    top: 46,
+    left: 0,
+    right: 0,
+    borderRadius: 14,
+    backgroundColor: uiTheme.surface,
+    borderWidth: 1,
+    borderColor: uiTheme.border,
+    paddingVertical: 6,
+    shadowColor: uiTheme.shadow,
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 6,
+    zIndex: 6,
+  },
+  historyDropdownOption: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  historyDropdownOptionActive: {
+    backgroundColor: uiTheme.surfaceTint,
+  },
+  historyDropdownOptionText: {
+    color: uiTheme.text,
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  historyDropdownOptionTextActive: {
+    color: uiTheme.backgroundStrong,
+  },
+  historyStateWrap: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: 'center',
+    paddingTop: 16,
+    paddingBottom: 110,
+  },
+  historyList: {
+    flex: 1,
+    minHeight: 0,
+    marginTop: 16,
   },
   historyListContent: {
     gap: 10,
-    paddingBottom: 12,
+    paddingBottom: 110,
   },
   historyItem: {
     borderRadius: 20,
     backgroundColor: uiTheme.backgroundStrong,
     borderWidth: 1,
-    height: 102,
+    height: 110,
     paddingHorizontal: 15,
     paddingVertical: 12,
     position: 'relative',
@@ -2356,6 +2862,34 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 4,
   },
+  historyItemDurationChip: {
+    position: 'absolute',
+    right: 14,
+    bottom: 12,
+    zIndex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  historyItemDurationChipCompleted: {
+    backgroundColor: 'rgba(108, 201, 164, 0.16)',
+    borderColor: 'rgba(155, 232, 201, 0.26)',
+  },
+  historyItemDurationText: {
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 11,
+    lineHeight: 12,
+    fontWeight: '800',
+  },
+  historyItemDurationTextCompleted: {
+    color: '#d6ffed',
+  },
   historyItemBadgeHighscore: {
     borderRadius: 999,
     backgroundColor: 'rgba(246, 225, 142, 0.28)',
@@ -2415,6 +2949,13 @@ const styles = StyleSheet.create({
   historyItemScoreContextCompleted: {
     color: 'rgba(203, 255, 232, 0.72)',
   },
+  historyFooterOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: 24,
+  },
   gameScreen: {
     flex: 1,
     paddingHorizontal: 16,
@@ -2458,10 +2999,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.1)',
   },
+  metricChipStableWidth: {
+    minWidth: 78,
+  },
   metricChipLabel: {
     color: uiTheme.surface,
     fontSize: 13,
     fontWeight: '800',
+  },
+  metricChipLabelStableWidth: {
+    minWidth: 36,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
   },
   promptCard: {
     marginTop: 14,
@@ -2524,6 +3073,23 @@ const styles = StyleSheet.create({
   statCardDanger: {
     backgroundColor: 'rgba(212, 99, 74, 0.16)',
   },
+  statCardIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+    borderWidth: 1,
+  },
+  statCardIconWrapScore: {
+    backgroundColor: 'rgba(255, 155, 87, 0.16)',
+    borderColor: 'rgba(255, 186, 138, 0.28)',
+  },
+  statCardIconWrapHighscore: {
+    backgroundColor: 'rgba(202, 138, 4, 0.18)',
+    borderColor: 'rgba(180, 117, 0, 0.34)',
+  },
   statCardValue: {
     color: uiTheme.surface,
     fontSize: 20,
@@ -2584,73 +3150,156 @@ const styles = StyleSheet.create({
     shadowRadius: 24,
     shadowOffset: { width: 0, height: 16 },
   },
-  summaryBadgeRow: {
+  summaryHeader: {
     flexDirection: 'row',
-    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 10,
   },
-  summaryBadge: {
+  summaryHighscoreBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: '#f3eadf',
+    gap: 5,
+    flexShrink: 0,
     borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    backgroundColor: 'rgba(202, 138, 4, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(180, 117, 0, 0.34)',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
   },
-  summaryBadgeText: {
-    color: uiTheme.text,
-    fontSize: 12,
+  summaryHighscoreBadgeText: {
+    color: '#976200',
+    fontSize: 9,
     fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
   },
   summaryTitle: {
     color: uiTheme.text,
     fontSize: 28,
     lineHeight: 32,
-    marginTop: 16,
+    flex: 1,
     fontWeight: '800',
     letterSpacing: -0.8,
   },
-  summarySubtitle: {
-    color: uiTheme.textMuted,
-    marginTop: 6,
-    fontSize: 14,
-    lineHeight: 20,
+  summaryModeCard: {
+    marginTop: 16,
+    borderRadius: 20,
+    minHeight: 88,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    backgroundColor: uiTheme.backgroundStrong,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  summaryModeContent: {
+    flexShrink: 1,
+    maxWidth: '58%',
+    minWidth: 0,
+    justifyContent: 'center',
+  },
+  summaryModeAccent: {
+    width: 32,
+    height: 4,
+    borderRadius: 999,
+    marginBottom: 10,
+  },
+  summaryModeValue: {
+    color: uiTheme.surface,
+    fontSize: 21,
+    lineHeight: 23,
+    fontWeight: '800',
+  },
+  summaryModeLabel: {
+    color: 'rgba(255,255,255,0.64)',
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  summaryModeArtworkLayer: {
+    ...StyleSheet.absoluteFillObject,
+    overflow: 'hidden',
+  },
+  summaryModeArtworkSlot: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'flex-end',
+  },
+  summaryModeArtworkStack: {
+    position: 'relative',
+  },
+  summaryModeArtworkShadow: {
+    position: 'absolute',
+    opacity: 0.12,
+  },
+  summaryModeArtwork: {
+    position: 'absolute',
+    opacity: 0.22,
   },
   summaryMetricsGrid: {
-    marginTop: 18,
+    marginTop: 8,
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 10,
   },
   summaryMetric: {
-    width: '48%',
+    flex: 1,
+    minWidth: 0,
     borderRadius: 20,
-    paddingVertical: 16,
+    paddingVertical: 15,
     paddingHorizontal: 14,
-    backgroundColor: uiTheme.surfaceTint,
+    backgroundColor: uiTheme.backgroundStrong,
     borderWidth: 1,
-    borderColor: uiTheme.border,
+    borderColor: 'rgba(255,255,255,0.08)',
+    overflow: 'hidden',
+  },
+  summaryMetricScore: {
+    shadowColor: 'rgba(255, 155, 87, 0.16)',
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+  },
+  summaryMetricTime: {
+    shadowColor: 'rgba(108, 201, 164, 0.2)',
+    shadowOpacity: 1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 5 },
+  },
+  summaryMetricIconWrap: {
+    width: 30,
+    height: 30,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    borderWidth: 1,
+  },
+  summaryMetricIconWrapScore: {
+    backgroundColor: 'rgba(255, 155, 87, 0.16)',
+    borderColor: 'rgba(255, 186, 138, 0.28)',
+  },
+  summaryMetricIconWrapTime: {
+    backgroundColor: 'rgba(108, 201, 164, 0.16)',
+    borderColor: 'rgba(155, 232, 201, 0.28)',
   },
   summaryMetricValue: {
-    color: uiTheme.text,
+    color: uiTheme.surface,
     fontSize: 20,
+    lineHeight: 23,
     fontWeight: '800',
   },
   summaryMetricLabel: {
-    color: uiTheme.textMuted,
+    color: 'rgba(255,255,255,0.64)',
     marginTop: 5,
     fontSize: 12,
-    fontWeight: '600',
-  },
-  summaryDetail: {
-    color: uiTheme.textMuted,
-    marginTop: 16,
-    fontSize: 14,
-    lineHeight: 20,
+    fontWeight: '700',
   },
   summaryButtonRow: {
     gap: 10,
-    marginTop: 18,
+    marginTop: 16,
   },
   pageGlowOne: {
     position: 'absolute',
