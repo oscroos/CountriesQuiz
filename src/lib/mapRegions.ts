@@ -65,6 +65,7 @@ type MapRegionPolygonExclusion = {
 type MapRegionFeatureTranslation = {
   alignGap?: number;
   alignBottomToDrawableEdge?: boolean;
+  alignBottomToFeatureBottomOf?: string;
   alignLeftToDrawableEdge?: boolean;
   alignLeftToFeatureRightOf?: string;
   countryName: string;
@@ -302,7 +303,7 @@ export const mapRegionPresets: Record<MapRegionKey, MapRegionPreset> = {
         countryName: 'alaska',
         deltaLongitude: 78.0524,
         deltaLatitude: -31.4,
-        alignBottomToDrawableEdge: true,
+        alignBottomToFeatureBottomOf: 'hawaii',
         alignLeftToDrawableEdge: true,
         scale: 0.34,
       },

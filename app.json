@@ -7,10 +7,26 @@
     "userInterfaceStyle": "light",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.oscarroos.countriesquiz"
+      "bundleIdentifier": "com.countriesquiz.app",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
-      "package": "com.oscarroos.countriesquiz"
+      "package": "com.countriesquiz.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
+      ]
+    },
+    "plugins": [
+      "expo-audio",
+      "expo-asset"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "2047b3fd-7b97-48e0-80d2-f6ba6e77c229"
+      }
     }
   }
 }

@@ -360,25 +360,6 @@ function buildFlatMapHtml(
         return normalizeCountryId(rawId);
       }
 
-      function escapeHtml(value) {
-        return String(value ?? '').replace(/[&<>"']/g, (character) => {
-          if (character === '&') return '&amp;';
-          if (character === '<') return '&lt;';
-          if (character === '>') return '&gt;';
-          if (character === '"') return '&quot;';
-          return '&#39;';
-        });
-      }
-
-      function showTooltip(label, event, meta) {
-        tooltip.innerHTML =
-          '<div class="tooltip__title">' + escapeHtml(label || 'Unknown') + '</div>' +
-          (meta ? '<div class="tooltip__meta">' + escapeHtml(meta) + '</div>' : '');
-        tooltip.style.display = 'block';
-        tooltip.style.left = event.clientX + 'px';
-        tooltip.style.top = event.clientY + 'px';
-      }
-
       function hideTooltip() {
         tooltip.style.display = 'none';
       }
@@ -1011,9 +992,15 @@ function buildFlatMapHtml(
         return deltaX;
       }
 
-      function resolveFeatureDisplayDeltaY(feature, pathGenerator) {
+      function resolveFeatureDisplayDeltaY(feature, pathGenerator, visitedNames = new Set()) {
         const featureTranslation = getFeatureTranslationRule(feature);
-        if (!featureTranslation || !featureTranslation.alignBottomToDrawableEdge) {
+        if (
+          !featureTranslation ||
+          (
+            !featureTranslation.alignBottomToDrawableEdge &&
+            !featureTranslation.alignBottomToFeatureBottomOf
+          )
+        ) {
           return 0;
         }
 
@@ -1021,16 +1008,38 @@ function buildFlatMapHtml(
         if (featureDisplayDeltaYCache.has(countryName)) {
           return featureDisplayDeltaYCache.get(countryName);
         }
+        if (visitedNames.has(countryName)) {
+          return 0;
+        }
 
         const featureBounds = pathGenerator.bounds(feature);
         if (!featureBounds || !Number.isFinite(featureBounds[1][1])) {
           return 0;
         }
 
-        const targetRawBottom =
-          (contentViewportHeight - VERTICAL_MAP_PADDING - stretchTranslateY) /
-          Math.max(0.0001, VERTICAL_STRETCH * baseFitScale);
-        const deltaY = targetRawBottom - featureBounds[1][1];
+        const nextVisitedNames = new Set(visitedNames);
+        nextVisitedNames.add(countryName);
+        let deltaY = 0;
+
+        if (featureTranslation.alignBottomToFeatureBottomOf) {
+          const referenceFeature = visibleFeatures.find(
+            (candidate) =>
+              normalizeCountryName(getFeatureName(candidate)) === featureTranslation.alignBottomToFeatureBottomOf
+          );
+          if (referenceFeature) {
+            const referenceBounds = pathGenerator.bounds(referenceFeature);
+            if (referenceBounds && Number.isFinite(referenceBounds[1][1])) {
+              const referenceDeltaY = resolveFeatureDisplayDeltaY(referenceFeature, pathGenerator, nextVisitedNames);
+              deltaY = referenceBounds[1][1] + referenceDeltaY - featureBounds[1][1];
+            }
+          }
+        } else if (featureTranslation.alignBottomToDrawableEdge) {
+          const targetRawBottom =
+            (contentViewportHeight - VERTICAL_MAP_PADDING - stretchTranslateY) /
+            Math.max(0.0001, VERTICAL_STRETCH * baseFitScale);
+          deltaY = targetRawBottom - featureBounds[1][1];
+        }
+
         featureDisplayDeltaYCache.set(countryName, deltaY);
         return deltaY;
       }
@@ -1137,7 +1146,6 @@ function buildFlatMapHtml(
             const kind = feature && feature.properties && feature.properties.adminLevel === 'state' ? 'state' : 'country';
             selectedPlaceId = placeId;
             updateCountryVisualState();
-            showTooltip(label, event, kind === 'state' ? 'U.S. state' : 'Country');
             postMessage({
               type: 'place-select',
               id: placeId,

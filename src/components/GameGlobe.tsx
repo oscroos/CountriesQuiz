@@ -235,16 +235,6 @@ function buildGlobeHtml(
         return 0.006;
       }
 
-      function escapeHtml(value) {
-        return String(value ?? '').replace(/[&<>"']/g, (character) => {
-          if (character === '&') return '&amp;';
-          if (character === '<') return '&lt;';
-          if (character === '>') return '&gt;';
-          if (character === '"') return '&quot;';
-          return '&#39;';
-        });
-      }
-
       function getPointerPosition(event) {
         if (!event) return null;
         if (typeof event.clientX === 'number' && typeof event.clientY === 'number') {
@@ -356,20 +346,6 @@ function buildGlobeHtml(
 
         interactionGuard.lastInteractionWasTap = false;
         return isRecentTap;
-      }
-
-      function showCountryLabel(countryName, event, kind) {
-        if (!countryLabel) return;
-        const rect = container.getBoundingClientRect();
-        const pointer = getPointerPosition(event);
-        const x = pointer ? pointer.x - rect.left : rect.width / 2;
-        const y = pointer ? pointer.y - rect.top : rect.height / 2;
-        countryLabel.innerHTML =
-          '<div class="country-label__title">' + escapeHtml(countryName || 'Unknown') + '</div>' +
-          '<div class="country-label__meta">' + escapeHtml(kind === 'state' ? 'U.S. state' : 'Country') + '</div>';
-        countryLabel.style.display = 'block';
-        countryLabel.style.left = x + 'px';
-        countryLabel.style.top = y + 'px';
       }
 
       function hideCountryLabel() {
@@ -714,7 +690,6 @@ function buildGlobeHtml(
           const kind = getFeatureKind(feature);
           selectedPlaceId = placeId;
           refreshPolygonStyles();
-          showCountryLabel(label, event, kind);
           postMessage({
             type: 'place-select',
             id: placeId,

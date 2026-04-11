@@ -83,7 +83,7 @@ const variantTemplates: readonly VariantTemplate[] = [
     region: 'world',
     showUsStates: true,
     description: 'Full globe, with the U.S. broken into individual states.',
-    accent: '#0f766e',
+    accent: '#be185d',
   },
   ...orderedContinentRegions.map((regionPreset, index) => ({
     id: `region-${regionPreset.key}`,

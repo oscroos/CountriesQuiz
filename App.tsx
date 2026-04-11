@@ -5,6 +5,7 @@ import {
   Easing,
   Image,
   Modal,
+  PanResponder,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -15,6 +16,7 @@ import {
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { LinearGradient } from 'expo-linear-gradient';
+import { setAudioModeAsync, useAudioPlayer, type AudioPlayer } from 'expo-audio';
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -39,6 +41,8 @@ import {
   type CompletedGameResult,
   type HighscoreMap,
 } from './src/lib/highscores';
+import { loadZoomHintDismissed, saveZoomHintDismissed } from './src/lib/preferences';
+import { useOnlineStatus } from './src/lib/useOnlineStatus';
 import { US_STATES_REGION_KEY, US_STATES_REGION_LABEL } from './src/lib/usStates';
 import { getThemeDefinition, type AppMapColors } from './src/theme/colors';
 
@@ -103,8 +107,8 @@ const uiTheme = {
 
 const quizMapTheme: AppMapColors = {
   ...getThemeDefinition('coast').mapColors,
-  user: '#1d78b8',
-  friendOne: '#db6f4f',
+  user: uiTheme.success,
+  friendOne: '#ff4f3f',
   friendTwo: '#e2a33c',
   unvisited: '#bcc9cf',
   stroke: '#f4fbfc',
@@ -112,6 +116,16 @@ const quizMapTheme: AppMapColors = {
   background: '#eef5f6',
   tooltipBg: 'rgba(17, 35, 52, 0.94)',
   tooltipText: '#fffaf2',
+};
+
+const soundEffectSources = {
+  correct: require('./src/sounds/correct.wav'),
+  gameOver: require('./src/sounds/game-over.wav'),
+};
+
+const soundEffectPlayerOptions = {
+  downloadFirst: true,
+  keepAudioSessionActive: true,
 };
 
 const regionVariantIds: readonly string[] = gameVariants
@@ -430,6 +444,25 @@ function getGamePlaceLabel(
     : `${place.displayName} (country)`;
 }
 
+function playSoundEffect(player: AudioPlayer) {
+  try {
+    void player
+      .seekTo(0)
+      .then(() => {
+        player.play();
+      })
+      .catch(() => {
+        try {
+          player.play();
+        } catch {
+          // Ignore sound playback failures; the quiz should never block on audio.
+        }
+      });
+  } catch {
+    // Ignore sound playback failures; the quiz should never block on audio.
+  }
+}
+
 function createGameSession(variant: GameVariant): GameSession {
   return {
     bestStreak: 0,
@@ -712,11 +745,18 @@ function AppContent() {
   const [summary, setSummary] = useState<GameSummary | null>(null);
   const [isStartModalOpen, setIsStartModalOpen] = useState(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState(false);
+  const [isDashboardHelpOpen, setIsDashboardHelpOpen] = useState(false);
+  const [isGameHelpOpen, setIsGameHelpOpen] = useState(false);
+  const [isZoomHintDismissed, setIsZoomHintDismissed] = useState(true);
+  const isOnline = useOnlineStatus();
   const [startModeOptionsHeight, setStartModeOptionsHeight] = useState(94);
   const [homeBoardsAreaHeight, setHomeBoardsAreaHeight] = useState(0);
   const [elapsedMs, setElapsedMs] = useState(0);
   const [historyRegionFilter, setHistoryRegionFilter] = useState<HistoryRegionFilter>('all');
   const [isHistoryRegionDropdownOpen, setIsHistoryRegionDropdownOpen] = useState(false);
+
+  const correctSoundPlayer = useAudioPlayer(soundEffectSources.correct, soundEffectPlayerOptions);
+  const gameOverSoundPlayer = useAudioPlayer(soundEffectSources.gameOver, soundEffectPlayerOptions);
 
   const highscoresRef = useRef<HighscoreMap>({});
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
@@ -899,6 +939,10 @@ function AppContent() {
   }, [gameHistory]);
 
   useEffect(() => {
+    void setAudioModeAsync({ playsInSilentMode: true }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (sessionStartedAt === null) {
       setElapsedMs(0);
       return;
@@ -924,7 +968,11 @@ function AppContent() {
   useEffect(() => {
     let isActive = true;
 
-    Promise.allSettled([loadHighscores(), loadGameHistory()]).then((results) => {
+    Promise.allSettled([
+      loadHighscores(),
+      loadGameHistory(),
+      loadZoomHintDismissed(),
+    ]).then((results) => {
       if (!isActive) {
         return;
       }
@@ -940,6 +988,13 @@ function AppContent() {
         setGameHistory(historyResult.value);
       }
       setIsLoadingHistory(false);
+
+      const zoomHintResult = results[2];
+      if (zoomHintResult.status === 'fulfilled') {
+        setIsZoomHintDismissed(zoomHintResult.value);
+      } else {
+        setIsZoomHintDismissed(false);
+      }
     });
 
     return () => {
@@ -1000,6 +1055,7 @@ function AppContent() {
       const answeredAt = Date.now();
 
       if (selection.id === currentQuestion.id) {
+        playSoundEffect(correctSoundPlayer);
         const nextScore = currentSession.score + 1;
         const nextStreak = currentSession.streak + 1;
         const solvedPlaceIds = [...currentSession.solvedPlaceIds, currentQuestion.id];
@@ -1050,6 +1106,7 @@ function AppContent() {
         return updatedSession;
       }
 
+      playSoundEffect(gameOverSoundPlayer);
       const updatedSession: GameSession = {
         ...currentSession,
         feedback: {
@@ -1173,6 +1230,19 @@ function AppContent() {
   const gameInstructionCopy = session
     ? `Click the above ${getGamePromptTargetLabel(session.variant)} on the map.`
     : '';
+  const promptFeedbackKind = session?.feedback && !summary ? session.feedback.kind : null;
+  const promptTitleCopy = summary
+    ? 'Game over'
+    : promptFeedbackKind === 'correct'
+      ? 'Correct!'
+      : promptFeedbackKind === 'wrong'
+        ? 'Incorrect!'
+        : currentQuestionLabel;
+  const promptSubtitleCopy = summary
+    ? `Score ${summary.score}/${summary.totalQuestions} in ${formatDurationMs(summary.durationMs)}`
+    : session?.feedback
+      ? session.feedback.label
+      : gameInstructionCopy;
   const sessionVariantBestScore = session
     ? Math.min(displayHighscores[session.variant.id]?.bestScore ?? 0, session.questionSet.length)
     : 0;
@@ -1206,18 +1276,43 @@ function AppContent() {
             </Pressable>
             <View style={styles.topBarMetrics}>
               <MetricChip icon="clock" label={formatDurationMs(elapsedMs)} stableWidth />
+              <HelpIconButton
+                accessibilityLabel="Open game rules"
+                onPress={() => setIsGameHelpOpen(true)}
+              />
             </View>
           </View>
 
-          <View style={styles.promptCard}>
-            <Text style={styles.promptEyebrow}>{session.variant.label}</Text>
-            <Text style={styles.promptTitle}>
-              {summary ? 'Run Complete' : currentQuestionLabel}
+          <View
+            style={[
+              styles.promptCard,
+              promptFeedbackKind === 'correct' && styles.promptCardCorrect,
+              promptFeedbackKind === 'wrong' && styles.promptCardWrong,
+            ]}
+          >
+            <Text
+              style={[
+                styles.promptEyebrow,
+                promptFeedbackKind && styles.promptEyebrowFeedback,
+              ]}
+            >
+              {session.variant.label}
             </Text>
-            <Text style={styles.promptSubtitle}>
-              {summary
-                ? `Score ${summary.score}/${summary.totalQuestions} in ${formatDurationMs(summary.durationMs)}`
-                : gameInstructionCopy}
+            <Text
+              style={[
+                styles.promptTitle,
+                promptFeedbackKind && styles.promptTitleFeedback,
+              ]}
+            >
+              {promptTitleCopy}
+            </Text>
+            <Text
+              style={[
+                styles.promptSubtitle,
+                promptFeedbackKind && styles.promptSubtitleFeedback,
+              ]}
+            >
+              {promptSubtitleCopy}
             </Text>
           </View>
 
@@ -1246,6 +1341,26 @@ function AppContent() {
             )}
           </View>
 
+          {isZoomHintDismissed ? null : (
+            <View style={styles.gameZoomHint}>
+              <Text style={styles.gameZoomHintText}>
+                <Text style={styles.gameZoomHintLabel}>Note: </Text>
+                Some places are tiny — pinch to zoom and drag the map to find them.
+              </Text>
+              <Pressable
+                accessibilityLabel="Dismiss tip"
+                hitSlop={10}
+                onPress={() => {
+                  setIsZoomHintDismissed(true);
+                  saveZoomHintDismissed();
+                }}
+                style={styles.gameZoomHintClose}
+              >
+                <Feather color="rgba(255,255,255,0.75)" name="x" size={16} />
+              </Pressable>
+            </View>
+          )}
+
           <View style={styles.gameBottomRow}>
             <StatCard
               icon="target"
@@ -1261,124 +1376,6 @@ function AppContent() {
             />
           </View>
 
-          {session.feedback && !summary ? (
-            <View
-              style={[
-                styles.feedbackToast,
-                session.feedback.kind === 'correct'
-                  ? styles.feedbackToastSuccess
-                  : styles.feedbackToastDanger,
-              ]}
-            >
-              <Text style={styles.feedbackTitle}>
-                {session.feedback.kind === 'correct' ? 'Nice hit' : 'Try again'}
-              </Text>
-              <Text style={styles.feedbackText}>{session.feedback.label}</Text>
-            </View>
-          ) : null}
-
-          {summary ? (
-            <View style={styles.summaryOverlay}>
-              <View style={styles.summaryCard}>
-                <View style={styles.summaryHeader}>
-                  <Text style={styles.summaryTitle}>Game summary</Text>
-                  {summary.isNewBest ? (
-                    <View style={styles.summaryHighscoreBadge}>
-                      <MaterialCommunityIcons color="#976200" name="trophy-outline" size={15} />
-                      <Text style={styles.summaryHighscoreBadgeText}>Highscore</Text>
-                    </View>
-                  ) : null}
-                </View>
-
-                <View style={styles.summaryModeCard}>
-                  {summaryModeArtwork ? (
-                    <View pointerEvents="none" style={styles.summaryModeArtworkLayer}>
-                      <View
-                        style={[
-                          styles.summaryModeArtworkSlot,
-                          {
-                            right: summaryModeArtwork.right,
-                            width: summaryModeArtwork.width,
-                          },
-                        ]}
-                      >
-                        <View
-                          style={[
-                            styles.summaryModeArtworkStack,
-                            {
-                              height: summaryModeArtwork.height,
-                              width:
-                                typeof summaryModeArtwork.width === 'string'
-                                  ? '100%'
-                                  : summaryModeArtwork.width,
-                            },
-                          ]}
-                        >
-                          <Image
-                            blurRadius={12}
-                            resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
-                            source={summaryModeArtwork.source}
-                            style={[
-                              styles.summaryModeArtworkShadow,
-                              {
-                                height: summaryModeArtwork.height,
-                                tintColor: summaryModeArtworkTint,
-                                width:
-                                  typeof summaryModeArtwork.width === 'string'
-                                    ? '100%'
-                                    : summaryModeArtwork.width,
-                              },
-                            ]}
-                          />
-                          <Image
-                            resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
-                            source={summaryModeArtwork.source}
-                            style={[
-                              styles.summaryModeArtwork,
-                              {
-                                height: summaryModeArtwork.height,
-                                tintColor: summaryModeArtworkTint,
-                                width:
-                                  typeof summaryModeArtwork.width === 'string'
-                                    ? '100%'
-                                    : summaryModeArtwork.width,
-                              },
-                            ]}
-                          />
-                        </View>
-                      </View>
-                    </View>
-                  ) : null}
-
-                  <View style={styles.summaryModeContent}>
-                    <View style={[styles.summaryModeAccent, { backgroundColor: summary.variant.accent }]} />
-                    <Text style={styles.summaryModeValue}>{summary.variant.shortLabel}</Text>
-                    <Text style={styles.summaryModeLabel}>Game mode</Text>
-                  </View>
-                </View>
-
-                <View style={styles.summaryMetricsGrid}>
-                  <SummaryMetric
-                    icon="target"
-                    label="Score"
-                    tone="score"
-                    value={`${summary.score} / ${summary.totalQuestions}`}
-                  />
-                  <SummaryMetric
-                    icon="clock"
-                    label="Time"
-                    tone="time"
-                    value={formatDurationMs(summary.durationMs)}
-                  />
-                </View>
-
-                <View style={styles.summaryButtonRow}>
-                  <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
-                  <SecondaryButton label="Leave" onPress={handleSummaryDashboard} />
-                </View>
-              </View>
-            </View>
-          ) : null}
         </View>
       ) : (
         <View style={styles.homeScreen}>
@@ -1390,9 +1387,15 @@ function AppContent() {
               <View style={styles.homeHeroCopy}>
                 <Text style={styles.homeHeroEyebrow}>Countries Quiz</Text>
                 <Text style={styles.homeHeroTitle}>Learn the World Map</Text>
-                <Text style={styles.homeHeroBody}>
-                  Practice every country and region until the full map becomes second nature.
-                </Text>
+                <View style={styles.homeHeroBodyRow}>
+                  <Text style={styles.homeHeroBody}>
+                    Practice every country and region until the full map becomes second nature.
+                  </Text>
+                  <HelpIconButton
+                    accessibilityLabel="Open dashboard explanation"
+                    onPress={() => setIsDashboardHelpOpen(true)}
+                  />
+                </View>
               </View>
             </View>
 
@@ -1470,6 +1473,263 @@ function AppContent() {
           </View>
         </View>
       )}
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={Boolean(summary)}
+        onRequestClose={handleSummaryDashboard}
+      >
+        {summary ? (
+          <View style={styles.summaryOverlay}>
+            <LinearGradient
+              colors={[
+                'rgba(8, 23, 35, 0.56)',
+                'rgba(8, 23, 35, 0.46)',
+                'rgba(8, 23, 35, 0.6)',
+              ]}
+              pointerEvents="none"
+              style={StyleSheet.absoluteFill}
+            />
+            <View style={styles.summaryCard}>
+              <View style={styles.summaryHeader}>
+                <Text style={styles.summaryTitle}>Game summary</Text>
+                {summary.isNewBest ? (
+                  <View style={styles.summaryHighscoreBadge}>
+                    <MaterialCommunityIcons color="#976200" name="trophy-outline" size={15} />
+                    <Text style={styles.summaryHighscoreBadgeText}>Highscore</Text>
+                  </View>
+                ) : null}
+              </View>
+
+              <View style={styles.summaryModeCard}>
+                {summaryModeArtwork ? (
+                  <View pointerEvents="none" style={styles.summaryModeArtworkLayer}>
+                    <View
+                      style={[
+                        styles.summaryModeArtworkSlot,
+                        {
+                          right: summaryModeArtwork.right,
+                          width: summaryModeArtwork.width,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.summaryModeArtworkStack,
+                          {
+                            height: summaryModeArtwork.height,
+                            width:
+                              typeof summaryModeArtwork.width === 'string'
+                                ? '100%'
+                                : summaryModeArtwork.width,
+                          },
+                        ]}
+                      >
+                        <Image
+                          blurRadius={12}
+                          resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                          source={summaryModeArtwork.source}
+                          style={[
+                            styles.summaryModeArtworkShadow,
+                            {
+                              height: summaryModeArtwork.height,
+                              tintColor: summaryModeArtworkTint,
+                              width:
+                                typeof summaryModeArtwork.width === 'string'
+                                  ? '100%'
+                                  : summaryModeArtwork.width,
+                            },
+                          ]}
+                        />
+                        <Image
+                          resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                          source={summaryModeArtwork.source}
+                          style={[
+                            styles.summaryModeArtwork,
+                            {
+                              height: summaryModeArtwork.height,
+                              tintColor: summaryModeArtworkTint,
+                              width:
+                                typeof summaryModeArtwork.width === 'string'
+                                  ? '100%'
+                                  : summaryModeArtwork.width,
+                            },
+                          ]}
+                        />
+                      </View>
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={styles.summaryModeContent}>
+                  <View style={[styles.summaryModeAccent, { backgroundColor: summary.variant.accent }]} />
+                  <Text style={styles.summaryModeValue}>{summary.variant.shortLabel}</Text>
+                  <Text style={styles.summaryModeLabel}>Game mode</Text>
+                </View>
+              </View>
+
+              <View style={styles.summaryMetricsGrid}>
+                <SummaryMetric
+                  icon="target"
+                  label="Score"
+                  tone="score"
+                  value={`${summary.score} / ${summary.totalQuestions}`}
+                />
+                <SummaryMetric
+                  icon="clock"
+                  label="Time"
+                  tone="time"
+                  value={formatDurationMs(summary.durationMs)}
+                />
+              </View>
+
+              <View style={styles.summaryButtonRow}>
+                <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
+                <SecondaryButton label="Leave" onPress={handleSummaryDashboard} />
+              </View>
+            </View>
+          </View>
+        ) : null}
+      </Modal>
+
+      <Modal
+        animationType="fade"
+        transparent
+        visible={!isOnline}
+        onRequestClose={() => {}}
+      >
+        <View style={styles.offlineOverlay}>
+          <LinearGradient
+            colors={[
+              'rgba(8, 23, 35, 0.72)',
+              'rgba(8, 23, 35, 0.58)',
+              'rgba(8, 23, 35, 0.76)',
+            ]}
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.offlineCard}>
+            <View style={styles.offlineIconWrap}>
+              <Feather color="#ff9b57" name="wifi-off" size={32} />
+            </View>
+            <Text style={styles.offlineTitle}>You're offline</Text>
+            <Text style={styles.offlineBody}>
+              Countries Quiz needs an internet connection to load the world map. Reconnect to Wi-Fi
+              or mobile data and the app will pick up right where you left off.
+            </Text>
+            <View style={styles.offlineStatusRow}>
+              <ActivityIndicator color="rgba(255,250,242,0.82)" size="small" />
+              <Text style={styles.offlineStatusText}>Waiting for a connection…</Text>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <BottomSheetModal
+        visible={isDashboardHelpOpen}
+        onClose={() => setIsDashboardHelpOpen(false)}
+      >
+            <Text style={styles.sheetEyebrow}>Dashboard guide</Text>
+            <Text style={styles.sheetTitle}>How the dashboard works</Text>
+
+            <View style={styles.helpSheetFooterFrame}>
+              <ScrollView
+                style={styles.helpSheetFooterScroll}
+                contentContainerStyle={[styles.helpSheetContent, styles.helpSheetContentWithFooter]}
+                showsVerticalScrollIndicator={false}
+              >
+                <HelpSection
+                  title="Highscores"
+                  points={[
+                    'Each card shows your best run for that game mode.',
+                    'The score is how many places you found in a row before the first miss.',
+                    'A completed card means you cleared every place in that mode without a wrong click.',
+                  ]}
+                />
+                <HelpSection
+                  title="Game modes"
+                  points={[
+                    'World uses all countries on the map.',
+                    'World & U.S. states keeps the full world map, but splits the United States into all 50 states.',
+                    'Region cards let you focus on a smaller part of the map before trying the full set.',
+                  ]}
+                />
+                <HelpSection
+                  title="Map coverage"
+                  points={[
+                    'Some very small countries and island territories are not included because they are too small to click reliably at this map scale.',
+                    'Europe and Atlantic omissions: Vatican City, Monaco, San Marino, Madeira, and Azores.',
+                    'Asia and Indian Ocean omissions: Hong Kong, Macao, Maldives, Seychelles, and Comoros.',
+                    'Pacific omissions: French Polynesia, Palau, Micronesia, Marshall Islands, Tonga, Kiribati, Nauru, and Tuvalu.',
+                  ]}
+                />
+                <HelpSection
+                  title="Goal"
+                  points={[
+                    'Pick a mode, start a run, and try to identify every country or state in order.',
+                    'Use the dashboard to see where you are improving and which regions still need practice.',
+                  ]}
+                />
+              </ScrollView>
+
+              <View pointerEvents="box-none" style={styles.helpFooterOverlay}>
+                <LinearGradient
+                  colors={['rgba(255, 250, 242, 0)', 'rgba(255, 250, 242, 0.94)', uiTheme.surface]}
+                  style={StyleSheet.absoluteFill}
+                />
+                <SecondaryButton
+                  label="Close"
+                  onPress={() => setIsDashboardHelpOpen(false)}
+                />
+              </View>
+            </View>
+      </BottomSheetModal>
+
+      <BottomSheetModal
+        visible={isGameHelpOpen}
+        onClose={() => setIsGameHelpOpen(false)}
+      >
+            <Text style={styles.sheetEyebrow}>Game rules</Text>
+            <Text style={styles.sheetTitle}>How to play</Text>
+
+            <ScrollView
+              style={styles.helpSheetScroll}
+              contentContainerStyle={styles.helpSheetContent}
+              showsVerticalScrollIndicator={false}
+            >
+              <HelpSection
+                title="Prompt"
+                points={[
+                  'The card at the top names the country or state you need to find.',
+                  'If a name can mean more than one place, the prompt clarifies whether it is a country or a U.S. state.',
+                ]}
+              />
+              <HelpSection
+                title="Map controls"
+                points={[
+                  'Drag the map to move around the world or region.',
+                  'Pinch or scroll to zoom in when countries or states are small or close together.',
+                  'Take your time. The timer tracks your result, but there is no time limit.',
+                ]}
+              />
+              <HelpSection
+                title="Run rules"
+                points={[
+                  'Tap the matching country or state on the map.',
+                  'Correct answers continue the run and increase your score.',
+                  'The first wrong click ends the game and saves the result to your history.',
+                ]}
+              />
+            </ScrollView>
+
+            <View style={styles.sheetButtonRow}>
+              <SecondaryButton
+                label="Close"
+                onPress={() => setIsGameHelpOpen(false)}
+              />
+            </View>
+      </BottomSheetModal>
 
       <BottomSheetModal visible={isStartModalOpen} onClose={() => setIsStartModalOpen(false)}>
             <Text style={styles.sheetEyebrow}>Start game</Text>
@@ -1923,6 +2183,51 @@ function MetricChip({
   );
 }
 
+function HelpIconButton({
+  accessibilityLabel,
+  onPress,
+}: {
+  accessibilityLabel: string;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityLabel={accessibilityLabel}
+      accessibilityRole="button"
+      hitSlop={8}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.helpIconButton,
+        pressed && styles.helpIconButtonPressed,
+      ]}
+    >
+      <Feather color={uiTheme.surface} name="help-circle" size={17} />
+    </Pressable>
+  );
+}
+
+function HelpSection({
+  points,
+  title,
+}: {
+  points: readonly string[];
+  title: string;
+}) {
+  return (
+    <View style={styles.helpSection}>
+      <Text style={styles.helpSectionTitle}>{title}</Text>
+      <View style={styles.helpPointList}>
+        {points.map((point) => (
+          <View key={point} style={styles.helpPointRow}>
+            <View style={styles.helpPointBullet} />
+            <Text style={styles.helpPointText}>{point}</Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function HistoryStatCard({ value }: { value: string }) {
   return (
     <View style={styles.historyStatCard}>
@@ -1962,8 +2267,10 @@ function StatCard({
           <MaterialCommunityIcons color="#d9b04b" name="trophy-outline" size={16} />
         )}
       </View>
-      <Text style={styles.statCardValue}>{value}</Text>
-      <Text style={styles.statCardLabel}>{label}</Text>
+      <View style={styles.statCardText}>
+        <Text style={styles.statCardValue}>{value}</Text>
+        <Text style={styles.statCardLabel}>{label}</Text>
+      </View>
     </View>
   );
 }
@@ -2015,6 +2322,45 @@ function BottomSheetModal({
   const insets = useSafeAreaInsets();
   const [isMounted, setIsMounted] = useState(visible);
   const translateY = useRef(new Animated.Value(viewportHeight)).current;
+  const dragStartValueRef = useRef(0);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dy) > 2,
+      onPanResponderGrant: () => {
+        translateY.stopAnimation((value) => {
+          dragStartValueRef.current = value;
+        });
+      },
+      onPanResponderMove: (_, gesture) => {
+        const next = Math.max(0, dragStartValueRef.current + gesture.dy);
+        translateY.setValue(next);
+      },
+      onPanResponderRelease: (_, gesture) => {
+        if (gesture.dy > 120 || gesture.vy > 0.8) {
+          onCloseRef.current();
+          return;
+        }
+        Animated.spring(translateY, {
+          toValue: 0,
+          useNativeDriver: true,
+          bounciness: 4,
+          speed: 18,
+        }).start();
+      },
+      onPanResponderTerminate: () => {
+        Animated.spring(translateY, {
+          toValue: 0,
+          useNativeDriver: true,
+          bounciness: 4,
+          speed: 18,
+        }).start();
+      },
+    }),
+  ).current;
 
   useEffect(() => {
     const hiddenOffset = Math.max(320, viewportHeight);
@@ -2079,6 +2425,9 @@ function BottomSheetModal({
             },
           ]}
         >
+          <View style={styles.sheetHandleArea} {...panResponder.panHandlers}>
+            <View style={styles.sheetHandle} />
+          </View>
           {children}
         </Animated.View>
       </View>
@@ -2165,11 +2514,19 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: -1.1,
   },
+  homeHeroBodyRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    marginTop: 8,
+    maxWidth: 300,
+  },
   homeHeroBody: {
+    flex: 1,
+    flexShrink: 1,
     color: 'rgba(255,255,255,0.8)',
     fontSize: 13,
     lineHeight: 18,
-    marginTop: 8,
     maxWidth: 250,
   },
   metricTile: {
@@ -2392,6 +2749,19 @@ const styles = StyleSheet.create({
   sheetCardFillHeight: {
     height: '92%',
   },
+  sheetHandleArea: {
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    paddingVertical: 8,
+    marginTop: -12,
+    marginBottom: 2,
+  },
+  sheetHandle: {
+    width: 42,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: 'rgba(8, 23, 35, 0.18)',
+  },
   sheetEyebrow: {
     color: uiTheme.backgroundStrong,
     textTransform: 'uppercase',
@@ -2412,6 +2782,69 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 14,
     lineHeight: 20,
+  },
+  helpSheetScroll: {
+    marginTop: 14,
+    maxHeight: 420,
+  },
+  helpSheetFooterFrame: {
+    marginTop: 14,
+    maxHeight: 420,
+    position: 'relative',
+  },
+  helpSheetFooterScroll: {
+    maxHeight: 420,
+  },
+  helpSheetContent: {
+    gap: 14,
+    paddingBottom: 2,
+  },
+  helpSheetContentWithFooter: {
+    paddingBottom: 92,
+  },
+  helpFooterOverlay: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    paddingTop: 24,
+  },
+  helpSection: {
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    backgroundColor: uiTheme.surfaceTint,
+    borderWidth: 1,
+    borderColor: uiTheme.border,
+  },
+  helpSectionTitle: {
+    color: uiTheme.text,
+    fontSize: 14,
+    lineHeight: 18,
+    fontWeight: '800',
+  },
+  helpPointList: {
+    gap: 8,
+    marginTop: 10,
+  },
+  helpPointRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+  },
+  helpPointBullet: {
+    width: 6,
+    height: 6,
+    borderRadius: 999,
+    marginTop: 7,
+    backgroundColor: uiTheme.accentStrong,
+  },
+  helpPointText: {
+    flex: 1,
+    color: uiTheme.textMuted,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
   },
   sheetScroll: {
     marginTop: 4,
@@ -2682,7 +3115,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    marginBottom: 14,
+    marginBottom: 8,
     position: 'relative',
     elevation: 4,
     zIndex: 4,
@@ -2692,8 +3125,9 @@ const styles = StyleSheet.create({
     backgroundColor: uiTheme.surfaceTint,
     borderWidth: 1,
     borderColor: uiTheme.border,
+    height: 40,
+    justifyContent: 'center',
     paddingHorizontal: 12,
-    paddingVertical: 9,
     minWidth: 86,
   },
   historyStatValue: {
@@ -2713,9 +3147,8 @@ const styles = StyleSheet.create({
     backgroundColor: uiTheme.surfaceTint,
     borderWidth: 1,
     borderColor: uiTheme.border,
-    minHeight: 40,
+    height: 40,
     paddingHorizontal: 12,
-    paddingVertical: 9,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
@@ -2729,7 +3162,7 @@ const styles = StyleSheet.create({
   },
   historyDropdownMenu: {
     position: 'absolute',
-    top: 46,
+    top: 44,
     left: 0,
     right: 0,
     borderRadius: 14,
@@ -2769,7 +3202,6 @@ const styles = StyleSheet.create({
   historyList: {
     flex: 1,
     minHeight: 0,
-    marginTop: 16,
   },
   historyListContent: {
     gap: 10,
@@ -2986,6 +3418,7 @@ const styles = StyleSheet.create({
   },
   topBarMetrics: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
   metricChip: {
@@ -3012,15 +3445,38 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     fontVariant: ['tabular-nums'],
   },
+  helpIconButton: {
+    width: 38,
+    height: 38,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  helpIconButtonPressed: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
   promptCard: {
     marginTop: 14,
     borderRadius: 26,
     padding: 18,
     backgroundColor: 'rgba(255,250,242,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,250,242,0.38)',
     shadowColor: uiTheme.shadow,
     shadowOpacity: 1,
     shadowRadius: 16,
     shadowOffset: { width: 0, height: 10 },
+  },
+  promptCardCorrect: {
+    backgroundColor: 'rgba(25, 125, 112, 0.96)',
+    borderColor: 'rgba(183, 255, 224, 0.28)',
+  },
+  promptCardWrong: {
+    backgroundColor: 'rgba(255, 79, 63, 0.97)',
+    borderColor: 'rgba(255, 232, 226, 0.38)',
   },
   promptEyebrow: {
     color: uiTheme.backgroundStrong,
@@ -3028,6 +3484,9 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1.8,
     fontWeight: '800',
+  },
+  promptEyebrowFeedback: {
+    color: 'rgba(255,250,242,0.78)',
   },
   promptTitle: {
     color: uiTheme.text,
@@ -3037,11 +3496,18 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: -0.8,
   },
+  promptTitleFeedback: {
+    color: uiTheme.surface,
+  },
   promptSubtitle: {
     color: uiTheme.textMuted,
     marginTop: 6,
     fontSize: 14,
     lineHeight: 19,
+  },
+  promptSubtitleFeedback: {
+    color: 'rgba(255,250,242,0.84)',
+    fontWeight: '700',
   },
   mapStage: {
     flex: 1,
@@ -3053,18 +3519,51 @@ const styles = StyleSheet.create({
     backgroundColor: quizMapTheme.background,
     minHeight: 360,
   },
+  gameZoomHint: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    marginTop: 12,
+    paddingVertical: 10,
+    paddingLeft: 14,
+    paddingRight: 8,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  gameZoomHintText: {
+    flex: 1,
+    color: 'rgba(255,255,255,0.78)',
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  gameZoomHintLabel: {
+    color: uiTheme.surface,
+    fontWeight: '800',
+  },
+  gameZoomHintClose: {
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 999,
+  },
   gameBottomRow: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 14,
+    marginTop: 10,
   },
   statCard: {
     flex: 1,
-    borderRadius: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderRadius: 20,
     backgroundColor: 'rgba(255,255,255,0.12)',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
-    paddingVertical: 14,
+    paddingVertical: 10,
     paddingHorizontal: 14,
   },
   statCardAccent: {
@@ -3073,13 +3572,15 @@ const styles = StyleSheet.create({
   statCardDanger: {
     backgroundColor: 'rgba(212, 99, 74, 0.16)',
   },
+  statCardText: {
+    flexShrink: 1,
+  },
   statCardIconWrap: {
     width: 30,
     height: 30,
     borderRadius: 999,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 12,
     borderWidth: 1,
   },
   statCardIconWrapScore: {
@@ -3092,50 +3593,78 @@ const styles = StyleSheet.create({
   },
   statCardValue: {
     color: uiTheme.surface,
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '800',
+    lineHeight: 22,
   },
   statCardLabel: {
     color: 'rgba(255,255,255,0.74)',
-    fontSize: 12,
-    marginTop: 4,
+    fontSize: 11,
+    marginTop: 1,
     fontWeight: '600',
+    lineHeight: 14,
   },
-  feedbackToast: {
-    position: 'absolute',
-    left: 28,
-    right: 28,
-    bottom: 110,
-    borderRadius: 22,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+  offlineOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 22,
+  },
+  offlineCard: {
+    width: '100%',
+    borderRadius: 28,
+    backgroundColor: uiTheme.surface,
+    padding: 24,
+    alignItems: 'center',
     shadowColor: uiTheme.shadow,
     shadowOpacity: 1,
-    shadowRadius: 16,
-    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
   },
-  feedbackToastSuccess: {
-    backgroundColor: 'rgba(25, 125, 112, 0.94)',
+  offlineIconWrap: {
+    width: 64,
+    height: 64,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 155, 87, 0.16)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 186, 138, 0.34)',
+    marginBottom: 16,
   },
-  feedbackToastDanger: {
-    backgroundColor: 'rgba(212, 99, 74, 0.94)',
-  },
-  feedbackTitle: {
-    color: uiTheme.surface,
-    fontSize: 13,
-    textTransform: 'uppercase',
-    letterSpacing: 1.4,
+  offlineTitle: {
+    color: uiTheme.text,
+    fontSize: 22,
     fontWeight: '800',
+    letterSpacing: -0.4,
+    textAlign: 'center',
   },
-  feedbackText: {
-    color: uiTheme.surface,
-    fontSize: 18,
-    marginTop: 6,
+  offlineBody: {
+    color: uiTheme.textMuted,
+    fontSize: 14,
+    lineHeight: 20,
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  offlineStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 999,
+    backgroundColor: 'rgba(8, 23, 35, 0.9)',
+  },
+  offlineStatusText: {
+    color: 'rgba(255,250,242,0.82)',
+    fontSize: 12,
     fontWeight: '700',
+    letterSpacing: 0.2,
   },
   summaryOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(8, 23, 35, 0.42)',
+    backgroundColor: 'rgba(8, 23, 35, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
