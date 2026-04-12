@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  BackHandler,
   Image,
-  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -47,6 +47,7 @@ import {
   type HighscoreMap,
 } from './src/lib/highscores';
 import { loadZoomHintDismissed, saveZoomHintDismissed } from './src/lib/preferences';
+import { useGameOverInterstitialAd } from './src/lib/useGameOverInterstitialAd';
 import { useOnlineStatus } from './src/lib/useOnlineStatus';
 import { US_STATES_REGION_KEY, US_STATES_REGION_LABEL } from './src/lib/usStates';
 import { getThemeDefinition, type AppMapColors } from './src/theme/colors';
@@ -137,7 +138,7 @@ const dashboardArtworkByRegion = {
   'south-america': require('./src/icons/south-america.png'),
   'us-states': require('./src/icons/usa.png'),
   world: require('./src/icons/world.png'),
-  'world-us-states': require('./src/icons/world+usa.png'),
+  'world-us-states': require('./src/icons/world-usa.png'),
 } as const;
 
 type BoardArtworkLayer = {
@@ -816,6 +817,7 @@ function AppContent() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [historyRegionFilter, setHistoryRegionFilter] = useState<HistoryRegionFilter>('all');
   const [isHistoryRegionDropdownOpen, setIsHistoryRegionDropdownOpen] = useState(false);
+  const { showGameOverInterstitial } = useGameOverInterstitialAd();
 
   const correctSoundPlayer = useAudioPlayer(soundEffectSources.correct, soundEffectPlayerOptions);
   const gameOverSoundPlayer = useAudioPlayer(soundEffectSources.gameOver, soundEffectPlayerOptions);
@@ -823,6 +825,8 @@ function AppContent() {
   const highscoresRef = useRef<HighscoreMap>({});
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
   const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const completedGamesThisAppSessionRef = useRef(0);
+  const showGameOverInterstitialRef = useRef(showGameOverInterstitial);
   const isMountedRef = useRef(true);
   const sessionVariantId = session?.variant.id ?? null;
   const sessionStartedAt = session?.startedAt ?? null;
@@ -1009,6 +1013,25 @@ function AppContent() {
   }, [gameHistory]);
 
   useEffect(() => {
+    showGameOverInterstitialRef.current = showGameOverInterstitial;
+  }, [showGameOverInterstitial]);
+
+  useEffect(() => {
+    if (!summary) {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBackToDashboard();
+      return true;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, [summary]);
+
+  useEffect(() => {
     void setAudioModeAsync({ playsInSilentMode: true }).catch(() => undefined);
   }, []);
 
@@ -1090,6 +1113,21 @@ function AppContent() {
   function scheduleAction(action: () => void, delayMs: number) {
     const timerId = setTimeout(action, delayMs);
     timerRefs.current.push(timerId);
+  }
+
+  function maybeShowGameOverInterstitial() {
+    completedGamesThisAppSessionRef.current += 1;
+
+    const completedGamesThisAppSession = completedGamesThisAppSessionRef.current;
+    const shouldShowInterstitial =
+      completedGamesThisAppSession === 2 ||
+      (completedGamesThisAppSession > 2 && Math.random() < 0.5);
+
+    if (!shouldShowInterstitial) {
+      return;
+    }
+
+    showGameOverInterstitialRef.current();
   }
 
   function beginGame(variant: GameVariant) {
@@ -1286,6 +1324,8 @@ function AppContent() {
       .catch(() => {
         // Ignore persistence errors and keep the in-memory summary.
       });
+
+    maybeShowGameOverInterstitial();
   }
 
   function goBackToDashboard() {
@@ -1627,124 +1667,117 @@ function AppContent() {
         </View>
       )}
 
-      <Modal
-        animationType="fade"
-        transparent
-        visible={Boolean(summary)}
-        onRequestClose={handleSummaryDashboard}
-      >
-        {summary ? (
-          <View style={styles.summaryOverlay}>
-            <LinearGradient
-              colors={[
-                'rgba(8, 23, 35, 0.56)',
-                'rgba(8, 23, 35, 0.46)',
-                'rgba(8, 23, 35, 0.6)',
-              ]}
-              pointerEvents="none"
-              style={StyleSheet.absoluteFill}
-            />
-            <View style={styles.summaryCard}>
-              <View style={styles.summaryHeader}>
-                <Text style={styles.summaryTitle}>Game summary</Text>
-                {summary.isNewBest ? (
-                  <View style={styles.summaryHighscoreBadge}>
-                    <MaterialCommunityIcons color="#976200" name="trophy-outline" size={15} />
-                    <Text style={styles.summaryHighscoreBadgeText}>Highscore</Text>
-                  </View>
-                ) : null}
-              </View>
+      {summary ? (
+        <View accessibilityViewIsModal importantForAccessibility="yes" style={styles.summaryOverlay}>
+          <LinearGradient
+            colors={[
+              'rgba(8, 23, 35, 0.56)',
+              'rgba(8, 23, 35, 0.46)',
+              'rgba(8, 23, 35, 0.6)',
+            ]}
+            pointerEvents="none"
+            style={StyleSheet.absoluteFill}
+          />
+          <View style={styles.summaryCard}>
+            <View style={styles.summaryHeader}>
+              <Text style={styles.summaryTitle}>Game summary</Text>
+              {summary.isNewBest ? (
+                <View style={styles.summaryHighscoreBadge}>
+                  <MaterialCommunityIcons color="#976200" name="trophy-outline" size={15} />
+                  <Text style={styles.summaryHighscoreBadgeText}>Highscore</Text>
+                </View>
+              ) : null}
+            </View>
 
-              <View style={styles.summaryModeCard}>
-                {summaryModeArtwork ? (
-                  <View pointerEvents="none" style={styles.summaryModeArtworkLayer}>
+            <View style={styles.summaryModeCard}>
+              {summaryModeArtwork ? (
+                <View pointerEvents="none" style={styles.summaryModeArtworkLayer}>
+                  <View
+                    style={[
+                      styles.summaryModeArtworkSlot,
+                      {
+                        right: summaryModeArtwork.right,
+                        width: summaryModeArtwork.width,
+                      },
+                    ]}
+                  >
                     <View
                       style={[
-                        styles.summaryModeArtworkSlot,
+                        styles.summaryModeArtworkStack,
                         {
-                          right: summaryModeArtwork.right,
-                          width: summaryModeArtwork.width,
+                          height: summaryModeArtwork.height,
+                          width:
+                            typeof summaryModeArtwork.width === 'string'
+                              ? '100%'
+                              : summaryModeArtwork.width,
                         },
                       ]}
                     >
-                      <View
+                      <Image
+                        blurRadius={12}
+                        resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                        source={summaryModeArtwork.source}
                         style={[
-                          styles.summaryModeArtworkStack,
+                          styles.summaryModeArtworkShadow,
                           {
                             height: summaryModeArtwork.height,
+                            tintColor: summaryModeArtworkTint,
                             width:
                               typeof summaryModeArtwork.width === 'string'
                                 ? '100%'
                                 : summaryModeArtwork.width,
                           },
                         ]}
-                      >
-                        <Image
-                          blurRadius={12}
-                          resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
-                          source={summaryModeArtwork.source}
-                          style={[
-                            styles.summaryModeArtworkShadow,
-                            {
-                              height: summaryModeArtwork.height,
-                              tintColor: summaryModeArtworkTint,
-                              width:
-                                typeof summaryModeArtwork.width === 'string'
-                                  ? '100%'
-                                  : summaryModeArtwork.width,
-                            },
-                          ]}
-                        />
-                        <Image
-                          resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
-                          source={summaryModeArtwork.source}
-                          style={[
-                            styles.summaryModeArtwork,
-                            {
-                              height: summaryModeArtwork.height,
-                              tintColor: summaryModeArtworkTint,
-                              width:
-                                typeof summaryModeArtwork.width === 'string'
-                                  ? '100%'
-                                  : summaryModeArtwork.width,
-                            },
-                          ]}
-                        />
-                      </View>
+                      />
+                      <Image
+                        resizeMode={summaryModeArtwork.resizeMode ?? 'contain'}
+                        source={summaryModeArtwork.source}
+                        style={[
+                          styles.summaryModeArtwork,
+                          {
+                            height: summaryModeArtwork.height,
+                            tintColor: summaryModeArtworkTint,
+                            width:
+                              typeof summaryModeArtwork.width === 'string'
+                                ? '100%'
+                                : summaryModeArtwork.width,
+                          },
+                        ]}
+                      />
                     </View>
                   </View>
-                ) : null}
-
-                <View style={styles.summaryModeContent}>
-                  <View style={[styles.summaryModeAccent, { backgroundColor: summary.variant.accent }]} />
-                  <Text style={styles.summaryModeValue}>{summary.variant.shortLabel}</Text>
-                  <Text style={styles.summaryModeLabel}>Game mode</Text>
                 </View>
-              </View>
+              ) : null}
 
-              <View style={styles.summaryMetricsGrid}>
-                <SummaryMetric
-                  icon="target"
-                  label="Score"
-                  tone="score"
-                  value={`${summary.score} / ${summary.totalQuestions}`}
-                />
-                <SummaryMetric
-                  icon="clock"
-                  label="Time"
-                  tone="time"
-                  value={formatDurationMs(summary.durationMs)}
-                />
-              </View>
-
-              <View style={styles.summaryButtonRow}>
-                <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
-                <SecondaryButton label="Leave" onPress={handleSummaryDashboard} />
+              <View style={styles.summaryModeContent}>
+                <View style={[styles.summaryModeAccent, { backgroundColor: summary.variant.accent }]} />
+                <Text style={styles.summaryModeValue}>{summary.variant.shortLabel}</Text>
+                <Text style={styles.summaryModeLabel}>Game mode</Text>
               </View>
             </View>
+
+            <View style={styles.summaryMetricsGrid}>
+              <SummaryMetric
+                icon="target"
+                label="Score"
+                tone="score"
+                value={`${summary.score} / ${summary.totalQuestions}`}
+              />
+              <SummaryMetric
+                icon="clock"
+                label="Time"
+                tone="time"
+                value={formatDurationMs(summary.durationMs)}
+              />
+            </View>
+
+            <View style={styles.summaryButtonRow}>
+              <PrimaryButton label="Play again" onPress={handleSummaryReplay} />
+              <SecondaryButton label="Leave" onPress={handleSummaryDashboard} />
+            </View>
           </View>
-        ) : null}
-      </Modal>
+        </View>
+      ) : null}
 
       <OfflineOverlay visible={!isOnline} />
 
@@ -3525,7 +3558,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(8, 23, 35, 0.5)',
     alignItems: 'center',
     justifyContent: 'center',
+    elevation: 20,
     paddingHorizontal: 18,
+    zIndex: 20,
   },
   summaryCard: {
     width: '100%',

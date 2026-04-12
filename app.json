@@ -31,7 +31,15 @@
     },
     "plugins": [
       "expo-audio",
-      "expo-asset"
+      "expo-asset",
+      [
+        "react-native-google-mobile-ads",
+        {
+          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
+          "iosAppId": "ca-app-pub-6399393872087612~8467540774",
+          "userTrackingUsageDescription": "This identifier will be used to deliver more relevant ads."
+        }
+      ]
     ],
     "extra": {
       "eas": {
