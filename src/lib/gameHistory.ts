@@ -25,11 +25,17 @@ function sanitizeEntry(value: unknown): GameHistoryEntry | null {
     typeof entry.variantId !== 'string' ||
     typeof entry.variantLabel !== 'string' ||
     typeof entry.score !== 'number' ||
+    !Number.isFinite(entry.score) ||
     typeof entry.accuracy !== 'number' ||
+    !Number.isFinite(entry.accuracy) ||
     typeof entry.durationMs !== 'number' ||
+    !Number.isFinite(entry.durationMs) ||
     typeof entry.correctCount !== 'number' ||
+    !Number.isFinite(entry.correctCount) ||
     typeof entry.totalQuestions !== 'number' ||
+    !Number.isFinite(entry.totalQuestions) ||
     typeof entry.misses !== 'number' ||
+    !Number.isFinite(entry.misses) ||
     typeof entry.playedAt !== 'string'
   ) {
     return null;
@@ -55,7 +61,7 @@ export async function loadGameHistory() {
       return [] as GameHistoryEntry[];
     }
 
-    const parsed = JSON.parse(rawValue) as unknown[];
+    const parsed = JSON.parse(rawValue) as unknown;
     if (!Array.isArray(parsed)) {
       return [] as GameHistoryEntry[];
     }

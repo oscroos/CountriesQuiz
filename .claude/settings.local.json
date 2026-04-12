@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm run:*)",
       "Bash(npx expo:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(grep -n \"unpkg\" /Users/oscarroos/CodingProjects/CountriesQuiz/src/components/*.tsx)"
     ]
   }
 }

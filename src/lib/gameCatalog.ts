@@ -259,12 +259,20 @@ export const gameVariants: readonly GameVariant[] = variantTemplates.map((templa
 
 export const defaultVariantId = 'globe-world';
 
+export function findVariantById(variantId: string) {
+  return gameVariants.find((variant) => variant.id === variantId) ?? null;
+}
+
 export function getVariantById(variantId: string) {
-  return gameVariants.find((variant) => variant.id === variantId) ?? gameVariants[0];
+  return findVariantById(variantId) ?? gameVariants[0];
 }
 
 export function buildQuestionSet(variant: GameVariant) {
   const shuffled = [...variant.places];
+
+  if (shuffled.length === 0) {
+    throw new Error(`Cannot build an empty question set for game variant "${variant.id}".`);
+  }
 
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const swapIndex = Math.floor(Math.random() * (index + 1));

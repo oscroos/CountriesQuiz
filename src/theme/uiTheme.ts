@@ -1,0 +1,17 @@
+export const uiTheme = {
+  background: '#f3eee6',
+  backgroundStrong: '#102f46',
+  backgroundDeep: '#0b2031',
+  surface: '#fffaf2',
+  surfaceSoft: 'rgba(255, 250, 242, 0.84)',
+  surfaceTint: '#f6efe4',
+  border: 'rgba(16, 47, 70, 0.12)',
+  borderStrong: 'rgba(16, 47, 70, 0.2)',
+  text: '#15283a',
+  textMuted: '#657a8b',
+  accent: '#ff9b57',
+  accentStrong: '#e9723d',
+  success: '#197d70',
+  danger: '#d4634a',
+  shadow: 'rgba(16, 47, 70, 0.16)',
+} as const;

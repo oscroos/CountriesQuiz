@@ -30,22 +30,26 @@ function createEmptyEntry(): HighscoreEntry {
   };
 }
 
-function sanitizeEntry(value: unknown): HighscoreEntry {
-  if (!value || typeof value !== 'object') {
-    return createEmptyEntry();
+function sanitizeNumber(value: unknown, fallback: number) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function sanitizeEntry(value: unknown): HighscoreEntry | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
   }
 
   const entry = value as Partial<HighscoreEntry>;
 
   return {
-    bestAccuracy: typeof entry.bestAccuracy === 'number' ? entry.bestAccuracy : 0,
-    bestScore: typeof entry.bestScore === 'number' ? entry.bestScore : 0,
+    bestAccuracy: sanitizeNumber(entry.bestAccuracy, 0),
+    bestScore: sanitizeNumber(entry.bestScore, 0),
     fastestMs:
       typeof entry.fastestMs === 'number' && Number.isFinite(entry.fastestMs)
         ? entry.fastestMs
         : null,
     lastPlayedAt: typeof entry.lastPlayedAt === 'string' ? entry.lastPlayedAt : null,
-    plays: typeof entry.plays === 'number' ? entry.plays : 0,
+    plays: sanitizeNumber(entry.plays, 0),
   };
 }
 
@@ -56,10 +60,22 @@ export async function loadHighscores() {
       return {} as HighscoreMap;
     }
 
-    const parsed = JSON.parse(rawValue) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).map(([variantId, entry]) => [variantId, sanitizeEntry(entry)])
-    ) as HighscoreMap;
+    const parsed = JSON.parse(rawValue) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {} as HighscoreMap;
+    }
+
+    const nextHighscores: HighscoreMap = {};
+
+    Object.entries(parsed).forEach(([variantId, entry]) => {
+      const sanitizedEntry = sanitizeEntry(entry);
+
+      if (sanitizedEntry) {
+        nextHighscores[variantId] = sanitizedEntry;
+      }
+    });
+
+    return nextHighscores;
   } catch {
     return {} as HighscoreMap;
   }

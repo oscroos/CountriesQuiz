@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 
 import { getDisplayGeoJson } from '../lib/displayGeoJson';
@@ -894,6 +894,12 @@ export function GameGlobe({
         style={styles.webview}
         onMessage={handleMessage}
       />
+      {isReady ? null : (
+        <View style={[styles.loadingOverlay, { backgroundColor: mapTheme.background }]}>
+          <ActivityIndicator color={mapTheme.unvisited} size="large" />
+          <Text style={[styles.loadingText, { color: mapTheme.unvisited }]}>Loading map…</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -908,5 +914,16 @@ const styles = StyleSheet.create({
   webview: {
     flex: 1,
     backgroundColor: 'transparent',
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+  },
+  loadingText: {
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.2,
   },
 });
