@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
+  type AppStateStatus,
   BackHandler,
   Image,
   Pressable,
@@ -46,6 +48,15 @@ import {
   type CompletedGameResult,
   type HighscoreMap,
 } from './src/lib/highscores';
+import {
+  trackAppOpen,
+  trackGameAbandoned,
+  trackGameFinished,
+  trackGameStarted,
+  trackHighscoreEarned,
+  trackScreenView,
+  trackSummaryAction,
+} from './src/lib/analytics';
 import { loadZoomHintDismissed, saveZoomHintDismissed } from './src/lib/preferences';
 import { useGameOverInterstitialAd } from './src/lib/useGameOverInterstitialAd';
 import { useOnlineStatus } from './src/lib/useOnlineStatus';
@@ -253,12 +264,12 @@ function getBoardArtworks(
     artworks: readonly BoardArtworkLayer[],
     scale = regionLargeScale,
     centerVertically = true
-  ) => {
-    const scaledArtworks =
+  ): readonly BoardArtworkLayer[] => {
+    const scaledArtworks: readonly BoardArtworkLayer[] =
       scale === 1 ? artworks : artworks.map((artwork) => scaleArtworkLayer(artwork, scale));
 
     return centerVertically
-      ? scaledArtworks.map((artwork) => ({
+      ? scaledArtworks.map((artwork): BoardArtworkLayer => ({
           ...artwork,
           centerY: '50%',
           offsetY: 0,
@@ -825,7 +836,9 @@ function AppContent() {
   const highscoresRef = useRef<HighscoreMap>({});
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
   const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const completedGamesThisAppSessionRef = useRef(0);
+  const startedGamesThisAppSessionRef = useRef(0);
   const showGameOverInterstitialRef = useRef(showGameOverInterstitial);
   const isMountedRef = useRef(true);
   const sessionVariantId = session?.variant.id ?? null;
@@ -915,6 +928,19 @@ function AppContent() {
     selectedVariant.placeCount > 0 && selectedVariantBestScore >= selectedVariant.placeCount;
   const isCompactBoardLayout = homeBoardsAreaHeight > 0 ? homeBoardsAreaHeight < 320 : screenHeight < 760;
   const isLargeDashboardLayout = screenWidth >= 700 && screenHeight >= 900;
+  const analyticsScreenName = summary
+    ? 'game_summary'
+    : isGameHelpOpen
+      ? 'game_help'
+      : isDashboardHelpOpen
+        ? 'dashboard_help'
+        : isHistoryModalOpen
+          ? 'game_history'
+          : isStartModalOpen
+            ? 'start_game_menu'
+            : session
+              ? 'game'
+              : 'dashboard';
   const decoratedHistory = useMemo(() => {
     const chronologicalEntries = [...gameHistory]
       .map((entry, index) => ({ entry, index }))
@@ -1017,11 +1043,32 @@ function AppContent() {
   }, [showGameOverInterstitial]);
 
   useEffect(() => {
+    trackScreenView(analyticsScreenName);
+  }, [analyticsScreenName]);
+
+  useEffect(() => {
+    trackAppOpen();
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      if (appStateRef.current.match(/inactive|background/) && nextAppState === 'active') {
+        trackAppOpen();
+      }
+
+      appStateRef.current = nextAppState;
+    });
+
+    return () => {
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (!summary) {
       return undefined;
     }
 
     const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      trackSummaryAction('leave', summary.variant, summary.score, summary.totalQuestions);
       goBackToDashboard();
       return true;
     });
@@ -1131,10 +1178,14 @@ function AppContent() {
   }
 
   function beginGame(variant: GameVariant) {
+    const sessionGameIndex = startedGamesThisAppSessionRef.current + 1;
+    startedGamesThisAppSessionRef.current = sessionGameIndex;
+
     clearPendingTimers();
     setElapsedMs(0);
     setSummary(null);
     setIsStartModalOpen(false);
+    trackGameStarted(variant, sessionGameIndex);
     setSession(createGameSession(variant));
   }
 
@@ -1289,6 +1340,26 @@ function AppContent() {
       variantId: finalSession.variant.id,
     };
 
+    trackGameFinished({
+      accuracy,
+      bestStreak: finalSession.bestStreak,
+      correctCount: finalSession.correctCount,
+      durationMs,
+      misses: finalSession.misses,
+      score,
+      sessionGameIndex: startedGamesThisAppSessionRef.current,
+      totalQuestions: finalSession.questionSet.length,
+      variant: finalSession.variant,
+    });
+
+    if (isNewBest) {
+      trackHighscoreEarned({
+        score,
+        totalQuestions: finalSession.questionSet.length,
+        variant: finalSession.variant,
+      });
+    }
+
     recordHighscore(highscoresRef.current, resultForStorage)
       .then((nextHighscores) => {
         if (!isMountedRef.current) {
@@ -1329,6 +1400,18 @@ function AppContent() {
   }
 
   function goBackToDashboard() {
+    if (session && !summary) {
+      trackGameAbandoned({
+        answeredCount: session.correctCount + session.misses,
+        durationMs: Math.max(0, Date.now() - session.startedAt),
+        misses: session.misses,
+        score: session.correctCount,
+        sessionGameIndex: startedGamesThisAppSessionRef.current,
+        totalQuestions: session.questionSet.length,
+        variant: session.variant,
+      });
+    }
+
     clearPendingTimers();
     setElapsedMs(0);
     setSummary(null);
@@ -1340,10 +1423,15 @@ function AppContent() {
       return;
     }
 
+    trackSummaryAction('play_again', summary.variant, summary.score, summary.totalQuestions);
     beginGame(summary.variant);
   }
 
   function handleSummaryDashboard() {
+    if (summary) {
+      trackSummaryAction('leave', summary.variant, summary.score, summary.totalQuestions);
+    }
+
     goBackToDashboard();
   }
 
