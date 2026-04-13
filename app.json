@@ -14,14 +14,12 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.countriesquiz.app",
-      "googleServicesFile": "./firebase/GoogleService-Info.plist",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.countriesquiz.app",
-      "googleServicesFile": "./firebase/google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#102f46"
@@ -34,27 +32,6 @@
     "plugins": [
       "expo-audio",
       "expo-asset",
-      "@react-native-firebase/app",
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "useFrameworks": "static",
-            "forceStaticLinking": [
-              "RNFBApp",
-              "RNFBAnalytics"
-            ]
-          }
-        }
-      ],
-      [
-        "react-native-google-mobile-ads",
-        {
-          "androidAppId": "ca-app-pub-3940256099942544~3347511713",
-          "iosAppId": "ca-app-pub-6399393872087612~8467540774",
-          "userTrackingUsageDescription": "This identifier will be used to deliver more relevant ads."
-        }
-      ],
       "expo-font"
     ],
     "extra": {

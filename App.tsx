@@ -58,7 +58,6 @@ import {
   trackSummaryAction,
 } from './src/lib/analytics';
 import { loadZoomHintDismissed, saveZoomHintDismissed } from './src/lib/preferences';
-import { useGameOverInterstitialAd } from './src/lib/useGameOverInterstitialAd';
 import { useOnlineStatus } from './src/lib/useOnlineStatus';
 import { US_STATES_REGION_KEY, US_STATES_REGION_LABEL } from './src/lib/usStates';
 import { getThemeDefinition, type AppMapColors } from './src/theme/colors';
@@ -828,7 +827,6 @@ function AppContent() {
   const [elapsedMs, setElapsedMs] = useState(0);
   const [historyRegionFilter, setHistoryRegionFilter] = useState<HistoryRegionFilter>('all');
   const [isHistoryRegionDropdownOpen, setIsHistoryRegionDropdownOpen] = useState(false);
-  const { showGameOverInterstitial } = useGameOverInterstitialAd();
 
   const correctSoundPlayer = useAudioPlayer(soundEffectSources.correct, soundEffectPlayerOptions);
   const gameOverSoundPlayer = useAudioPlayer(soundEffectSources.gameOver, soundEffectPlayerOptions);
@@ -837,9 +835,7 @@ function AppContent() {
   const gameHistoryRef = useRef<GameHistoryEntry[]>([]);
   const timerRefs = useRef<ReturnType<typeof setTimeout>[]>([]);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
-  const completedGamesThisAppSessionRef = useRef(0);
   const startedGamesThisAppSessionRef = useRef(0);
-  const showGameOverInterstitialRef = useRef(showGameOverInterstitial);
   const isMountedRef = useRef(true);
   const sessionVariantId = session?.variant.id ?? null;
   const sessionStartedAt = session?.startedAt ?? null;
@@ -1039,10 +1035,6 @@ function AppContent() {
   }, [gameHistory]);
 
   useEffect(() => {
-    showGameOverInterstitialRef.current = showGameOverInterstitial;
-  }, [showGameOverInterstitial]);
-
-  useEffect(() => {
     trackScreenView(analyticsScreenName);
   }, [analyticsScreenName]);
 
@@ -1160,21 +1152,6 @@ function AppContent() {
   function scheduleAction(action: () => void, delayMs: number) {
     const timerId = setTimeout(action, delayMs);
     timerRefs.current.push(timerId);
-  }
-
-  function maybeShowGameOverInterstitial() {
-    completedGamesThisAppSessionRef.current += 1;
-
-    const completedGamesThisAppSession = completedGamesThisAppSessionRef.current;
-    const shouldShowInterstitial =
-      completedGamesThisAppSession === 2 ||
-      (completedGamesThisAppSession > 2 && Math.random() < 0.5);
-
-    if (!shouldShowInterstitial) {
-      return;
-    }
-
-    showGameOverInterstitialRef.current();
   }
 
   function beginGame(variant: GameVariant) {
@@ -1396,7 +1373,6 @@ function AppContent() {
         // Ignore persistence errors and keep the in-memory summary.
       });
 
-    maybeShowGameOverInterstitial();
   }
 
   function goBackToDashboard() {
