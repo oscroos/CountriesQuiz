@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, StatusBar as NativeStatusBar } from 'react-native';
+import {
+  getTrackingPermissionsAsync,
+  PermissionStatus,
+  requestTrackingPermissionsAsync,
+} from 'expo-tracking-transparency';
 import mobileAds, { TestIds, useInterstitialAd } from 'react-native-google-mobile-ads';
 
 const GAME_OVER_INTERSTITIAL_AD_UNIT_IDS = {
@@ -42,14 +47,21 @@ export function useGameOverInterstitialAd() {
 
     let isActive = true;
 
-    mobileAds()
-      .initialize()
-      .then(() => {
-        if (isActive) {
-          setIsMobileAdsInitialized(true);
+    const initializeMobileAds = async () => {
+      if (Platform.OS === 'ios') {
+        const trackingPermissions = await getTrackingPermissionsAsync();
+        if (trackingPermissions.status === PermissionStatus.UNDETERMINED) {
+          await requestTrackingPermissionsAsync();
         }
-      })
-      .catch(() => undefined);
+      }
+
+      await mobileAds().initialize();
+      if (isActive) {
+        setIsMobileAdsInitialized(true);
+      }
+    };
+
+    void initializeMobileAds().catch(() => undefined);
 
     return () => {
       isActive = false;
